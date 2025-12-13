@@ -158,11 +158,18 @@ impl Bodies {
         j: usize,
     ) -> Result<(), IntegratorError> {
         let gm = G * masses[0];
-        let a = &mut self.q[i];
-        let b = &mut self.v[i];
+        let a_i = &mut self.q[i];
+        let b_i = &mut self.v[i];
 
-        let mut kpl = KeplerSystem::new(a, b, gm, h);
-        kpl.step(0)
+        let mut kpl_i = KeplerSystem::new(a_i, b_i, gm, h);
+        kpl_i.step(0)?;
+
+        let a_j = &mut self.q[j];
+        let b_j = &mut self.v[j];
+        let mut kpl_j = KeplerSystem::new(a_j, b_j, gm, h);
+        kpl_j.step(0)?;
+
+        Ok(())
     }
 }
 
@@ -273,7 +280,10 @@ impl<'a> KeplerSystem<'a> {
             panic!("Kepler step did not converge");
         }
 
-        self.step_internal()
+        self.step_internal().or_else(|_| {
+            self.dt /= 4.0;
+            self.step(depth + 1)
+        })
     }
 
     fn step_internal(&mut self) -> Result<(), IntegratorError> {
@@ -325,8 +335,8 @@ impl<'a> KeplerSystem<'a> {
                 Err(_) => return Err(IntegratorError::KeplerStepFailed),
             }
         } else {
-            let x = self.dt / self.r0;
-            let result = self.solve_universal_parabolic();
+            let mut x = self.dt / self.r0;
+            let result = self.solve_universal_parabolic(&mut x);
             match result {
                 Ok((_, _)) => {
                     let g1 = x;
@@ -362,6 +372,14 @@ impl<'a> KeplerSystem<'a> {
         self.vd.data[2] = s6;
 
         Ok(())
+    }
+
+    fn solve_universal_parabolic(&self, x: &mut f64) -> Result<(f64, f64), ()> {
+        let a = 3.0 * self.eta / self.zeta;
+        let b = 6.0 * self.r0 / self.zeta;
+        let c = -6.0 * self.dt / self.zeta;
+        *x = cubic(a, b, c);
+        Ok((0.0, 1.0))
     }
 
     fn solve_universal_hyperbolic_newton(&self, x: &mut f64) -> Result<(f64, f64), ()> {
@@ -452,7 +470,8 @@ impl<'a> KeplerSystem<'a> {
         Ok((s2, c2))
     }
 
-    fn solve_universal_parabolic(&self) -> Result<(f64, f64), ()> {
+    #[allow(dead_code)]
+    fn solve_universal_hyperbolic_bisection(&self, x: &mut f64) -> Result<(f64, f64), ()> {
         todo!()
     }
 }
