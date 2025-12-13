@@ -25,3 +25,10 @@ Manifest.toml
 
 # Fuck vscode
 .vscode/
+
+
+# Added by cargo
+
+/target
+
+.DS_Store
