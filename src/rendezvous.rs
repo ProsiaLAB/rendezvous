@@ -223,7 +223,17 @@ impl Simulation {
     }
 
     pub fn integrate(&mut self, t_end: f64) {
-        unimplemented!()
+        if t_end != self.t {
+            let dt_sign = (t_end - self.t).signum();
+            self.dt = self.dt.copysign(dt_sign);
+        }
+
+        let last_full_dt = self.dt;
+        self.dt_last_done = 0.0;
+
+        // TODO: add the warning stuff here
+
+        self.heartbeat();
     }
 }
 
