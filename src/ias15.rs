@@ -6,6 +6,13 @@ pub struct Ias15 {
     pub n_allocated: usize,
 }
 
+impl Ias15 {
+    pub fn reset(&mut self) {
+        // Reset internal state
+        todo!()
+    }
+}
+
 pub enum AdaptiveMode {
     Individual,
     Global,
