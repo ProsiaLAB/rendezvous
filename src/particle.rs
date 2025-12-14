@@ -1,4 +1,4 @@
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Particle {
     pub x: f64,
     pub y: f64,
