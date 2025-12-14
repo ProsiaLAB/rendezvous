@@ -97,9 +97,8 @@ impl Simulation {
             return;
         }
 
-        if self.gravity == Gravity::Tree
-            || self.collision == Collision::Tree
-            || self.collision == Collision::LineTree
+        if matches!(self.gravity, Gravity::Tree)
+            || matches!(self.collision, Collision::Tree | Collision::LineTree)
         {
             if self.root_size == -1.0 {
                 eprintln!("ERROR: Box not configured before adding particles.");
@@ -228,7 +227,6 @@ impl Simulation {
     }
 }
 
-#[derive(PartialEq)]
 pub enum Gravity {
     None,
     Basic,
@@ -239,7 +237,6 @@ pub enum Gravity {
     Trace,
 }
 
-#[derive(PartialEq)]
 pub enum Collision {
     None,
     Direct,
