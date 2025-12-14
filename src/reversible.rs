@@ -1,113 +1,12 @@
 //! Implementation of algorithms discussed in [Hernandez & Dehnen (2024)](https://academic.oup.com/mnras/article/530/4/3870/7642878)
 
-use std::{
-    iter::Sum,
-    ops::{Add, AddAssign, Mul, Sub, SubAssign},
-};
+use crate::utils::vector::Vector;
 
 pub enum IntegratorError {
     KeplerStepFailed,
 }
 
 const G: f64 = 2.9591220828559093e-4; // AU^3 / (day^2 * solar mass) 
-
-#[derive(Copy, Clone, Debug)]
-pub struct Vector {
-    data: [f64; 3],
-}
-
-impl Vector {
-    pub fn new(x: f64, y: f64, z: f64) -> Self {
-        Vector { data: [x, y, z] }
-    }
-
-    pub fn zero() -> Self {
-        Vector {
-            data: [0.0, 0.0, 0.0],
-        }
-    }
-
-    pub fn norm(&self) -> f64 {
-        (self.data[0] * self.data[0] + self.data[1] * self.data[1] + self.data[2] * self.data[2])
-            .sqrt()
-    }
-
-    pub fn dot(&self, other: &Vector) -> f64 {
-        self.data[0] * other.data[0] + self.data[1] * other.data[1] + self.data[2] * other.data[2]
-    }
-}
-
-// Vector * scalar
-impl Mul<f64> for Vector {
-    type Output = Vector;
-
-    fn mul(self, rhs: f64) -> Vector {
-        Vector {
-            data: [self.data[0] * rhs, self.data[1] * rhs, self.data[2] * rhs],
-        }
-    }
-}
-
-// scalar * Vector (optional but often useful)
-impl Mul<Vector> for f64 {
-    type Output = Vector;
-
-    fn mul(self, rhs: Vector) -> Vector {
-        rhs * self
-    }
-}
-
-// Vector + Vector
-impl Add for Vector {
-    type Output = Vector;
-
-    fn add(self, rhs: Vector) -> Vector {
-        Vector {
-            data: [
-                self.data[0] + rhs.data[0],
-                self.data[1] + rhs.data[1],
-                self.data[2] + rhs.data[2],
-            ],
-        }
-    }
-}
-
-impl AddAssign for Vector {
-    fn add_assign(&mut self, rhs: Vector) {
-        self.data[0] += rhs.data[0];
-        self.data[1] += rhs.data[1];
-        self.data[2] += rhs.data[2];
-    }
-}
-
-impl Sub for Vector {
-    type Output = Vector;
-
-    fn sub(self, rhs: Vector) -> Vector {
-        Vector {
-            data: [
-                self.data[0] - rhs.data[0],
-                self.data[1] - rhs.data[1],
-                self.data[2] - rhs.data[2],
-            ],
-        }
-    }
-}
-
-impl SubAssign for Vector {
-    fn sub_assign(&mut self, rhs: Vector) {
-        self.data[0] -= rhs.data[0];
-        self.data[1] -= rhs.data[1];
-        self.data[2] -= rhs.data[2];
-    }
-}
-
-// Enable iterator .sum()
-impl Sum for Vector {
-    fn sum<I: Iterator<Item = Vector>>(iter: I) -> Vector {
-        iter.fold(Vector::zero(), |a, b| a + b)
-    }
-}
 
 pub struct Bodies {
     pub q: Vec<Vector>,
@@ -357,21 +256,16 @@ impl<'a> KeplerSystem<'a> {
         let fdot = -bsa;
         let gdothat = -(ca / r);
 
-        let s1 = self.v.data[0] + fhat * self.v.data[0] + g * self.vd.data[0];
-        let s2 = self.v.data[1] + fhat * self.v.data[1] + g * self.vd.data[1];
-        let s3 = self.v.data[2] + fhat * self.v.data[2] + g * self.vd.data[2];
+        let s1 = self.v.x() + fhat * self.v.x() + g * self.vd.x();
+        let s2 = self.v.y() + fhat * self.v.y() + g * self.vd.y();
+        let s3 = self.v.z() + fhat * self.v.z() + g * self.vd.z();
 
-        let s4 = self.vd.data[0] + fdot * self.v.data[0] + gdothat * self.vd.data[0];
-        let s5 = self.vd.data[1] + fdot * self.v.data[1] + gdothat * self.vd.data[1];
-        let s6 = self.vd.data[2] + fdot * self.v.data[2] + gdothat * self.vd.data[2];
+        let s4 = self.vd.x() + fdot * self.v.x() + gdothat * self.vd.x();
+        let s5 = self.vd.y() + fdot * self.v.y() + gdothat * self.vd.y();
+        let s6 = self.vd.z() + fdot * self.v.z() + gdothat * self.vd.z();
 
-        self.v.data[0] = s1;
-        self.v.data[1] = s2;
-        self.v.data[2] = s3;
-
-        self.vd.data[0] = s4;
-        self.vd.data[1] = s5;
-        self.vd.data[2] = s6;
+        self.v.set(s1, s2, s3);
+        self.vd.set(s4, s5, s6);
 
         Ok(())
     }

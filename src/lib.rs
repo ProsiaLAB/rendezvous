@@ -13,4 +13,5 @@ pub mod reversible;
 pub mod saba;
 pub mod sei;
 pub mod trace;
+pub mod utils;
 pub mod whfast;
