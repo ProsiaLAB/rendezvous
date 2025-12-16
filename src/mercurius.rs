@@ -1,4 +1,9 @@
-use crate::{ias15::Ias15, particle::Particle, rendezvous::Simulation, whfast::WHFast};
+use crate::{
+    ias15::Ias15,
+    integrator::{ForceSplitIntegrator, StepContext, SyncContext, Synchronizable},
+    particle::Particle,
+    whfast::WHFast,
+};
 
 pub struct Mercurius {
     pub r_crit_hill: f64,
@@ -6,18 +11,18 @@ pub struct Mercurius {
     pub recalculate_r_crit_this_time_step: bool,
     pub safe_mode: bool,
 
-    pub(crate) is_synchronized: bool,
-    pub(crate) mode: MercuriusMode,
-    pub(crate) n_encounter: usize,
-    pub(crate) n_encounter_active: usize,
-    pub(crate) tp_only_encounter: bool,
-    pub(crate) dcrit: Vec<f64>,
-    pub(crate) particles_backup: Vec<Particle>,
-    pub(crate) particles_backup_additional_forces: Vec<Particle>,
-    pub(crate) encounter_map: Vec<usize>,
+    pub is_synchronized: bool,
+    pub mode: MercuriusMode,
+    pub n_encounter: usize,
+    pub n_encounter_active: usize,
+    pub tp_only_encounter: bool,
+    pub dcrit: Vec<f64>,
+    pub particles_backup: Vec<Particle>,
+    pub particles_backup_additional_forces: Vec<Particle>,
+    pub encounter_map: Vec<usize>,
 
-    pub(crate) whfast: WHFast,
-    pub(crate) ias15: Ias15,
+    pub whfast: WHFast,
+    pub ias15: Ias15,
 }
 
 impl Mercurius {
@@ -53,7 +58,23 @@ impl Mercurius {
     }
 }
 
-pub(crate) enum MercuriusMode {
+impl Synchronizable for Mercurius {
+    fn synchronize(&mut self, _ctx: SyncContext<'_>) {
+        todo!()
+    }
+}
+
+impl ForceSplitIntegrator for Mercurius {
+    fn pre_force(&mut self, _ctx: StepContext<'_>) {
+        todo!()
+    }
+
+    fn post_force(&mut self, _ctx: StepContext<'_>) {
+        todo!()
+    }
+}
+
+pub enum MercuriusMode {
     LongRange,
     CloseEncounter,
 }

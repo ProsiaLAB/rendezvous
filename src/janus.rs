@@ -1,1 +1,19 @@
+use crate::integrator::{ForceSplitIntegrator, StepContext, SyncContext, Synchronizable};
+
 pub struct Janus;
+
+impl Synchronizable for Janus {
+    fn synchronize(&mut self, _ctx: SyncContext<'_>) {
+        todo!()
+    }
+}
+
+impl ForceSplitIntegrator for Janus {
+    fn pre_force(&mut self, _ctx: StepContext<'_>) {
+        todo!()
+    }
+
+    fn post_force(&mut self, _ctx: StepContext<'_>) {
+        todo!()
+    }
+}

@@ -1,7 +1,15 @@
+use std::ops::ControlFlow;
+
 use crate::{
-    collision::CollisionResolver, integrator::Integrator, mercurius::MercuriusMode,
-    particle::Particle, trace::TraceMode,
+    collision::CollisionResolver,
+    integrator::{ForceSplitIntegrator, Integrator, StepContext, SyncContext, Synchronizable},
+    mercurius::MercuriusMode,
+    ode::OdeState,
+    particle::Particle,
+    trace::TraceMode,
 };
+
+type StepDecision = ControlFlow<ExitStatus, ()>;
 
 #[allow(non_snake_case)]
 pub struct Simulation {
@@ -10,6 +18,12 @@ pub struct Simulation {
     pub softening: f64,
     pub dt: f64,
     pub dt_last_done: f64,
+    pub steps_done: usize,
+
+    pub n: usize,
+    pub n_var: Option<usize>,
+
+    pub run_state: RunState,
 
     pub root_size: f64,
     pub root_x: usize,
@@ -25,10 +39,24 @@ pub struct Simulation {
     pub boundary: Boundary,
 
     pub n_active: usize,
+    pub exit_max_distance: Option<f64>,
+    pub exit_min_distance: Option<f64>,
+    pub exact_finish_time: bool,
 
     pub particles: Vec<Particle>,
+    pub odes: Vec<OdeState>,
 
     pub integrator: Integrator,
+    /// Executed at each timestep once.
+    /// Use this to do extra output/work during a simulation.
+    pub heartbeat: Option<fn(&mut Self)>,
+
+    pub additional_forces: Option<fn(&mut Self)>,
+    pub pre_time_step_modifications: Option<fn(&mut Self)>,
+    pub post_time_step_modifications: Option<fn(&mut Self)>,
+
+    pub tree_root: Option<usize>,
+    pub tree_needs_update: bool,
 }
 
 impl Simulation {
@@ -39,6 +67,7 @@ impl Simulation {
             softening: 0.0,
             dt: 0.01,
             dt_last_done: 0.0,
+            steps_done: 0,
 
             root_size: -1.0,
             root_x: 1,
@@ -48,6 +77,15 @@ impl Simulation {
             n_root: 1,
             box_size_max: -1.0,
 
+            exit_max_distance: None,
+            exit_min_distance: None,
+            exact_finish_time: true,
+            run_state: RunState::Running,
+
+            heartbeat: None,
+            n: 0,
+            n_var: None,
+
             gravity: Gravity::Basic,
             collision: Collision::None,
             collision_resolve: None,
@@ -56,8 +94,15 @@ impl Simulation {
             n_active: usize::MAX,
 
             particles: Vec::new(),
+            odes: Vec::new(),
 
             integrator,
+            additional_forces: None,
+            pre_time_step_modifications: None,
+            post_time_step_modifications: None,
+
+            tree_root: None,
+            tree_needs_update: false,
         }
     }
 
@@ -206,34 +251,334 @@ impl Simulation {
         }
     }
 
-    pub fn additional_forces(&mut self) {
+    pub fn pre_time_step(&mut self, _dt: f64) {
         unimplemented!()
     }
 
-    pub fn pre_time_step(&mut self, dt: f64) {
+    pub fn post_time_step(&mut self, _dt: f64) {
         unimplemented!()
     }
 
-    pub fn post_time_step(&mut self, dt: f64) {
+    pub fn coefficient_of_restitution(&self, _p1: &Particle, _p2: &Particle) -> f64 {
         unimplemented!()
     }
 
-    pub fn coefficient_of_restitution(&self, p1: &Particle, p2: &Particle) -> f64 {
-        unimplemented!()
+    pub fn run_heartbeat(&mut self) -> StepDecision {
+        if let Some(hb) = self.heartbeat {
+            hb(self);
+        };
+
+        if let Some(max_distance) = self.exit_max_distance {
+            let max2 = max_distance * max_distance;
+            for p in self.particles.iter().take(self.n) {
+                let r2 = p.x * p.x + p.y * p.y + p.z * p.z;
+                if r2 > max2 {
+                    return ControlFlow::Break(ExitStatus::Escape);
+                }
+            }
+        }
+
+        if let Some(min_distance) = self.exit_min_distance {
+            let min2 = min_distance * min_distance;
+            for i in 0..self.n {
+                let p = &self.particles[i];
+                for j in 0..i {
+                    let q = &self.particles[j];
+                    let x = p.x - q.x;
+                    let y = p.y - q.y;
+                    let z = p.z - q.z;
+                    let r2 = x * x + y * y + z * z;
+                    if r2 < min2 {
+                        return ControlFlow::Break(ExitStatus::Encounter);
+                    }
+                }
+            }
+        }
+
+        ControlFlow::Continue(())
     }
 
-    pub fn integrate(&mut self, t_end: f64) {
+    pub fn sigint_received(&self) -> bool {
+        todo!()
+    }
+
+    pub fn check_exit(&mut self, tmax: f64, last_full_dt: &mut f64) -> StepDecision {
+        if let RunState::SingleStep { remaining } = self.run_state {
+            if remaining > 0 {
+                self.run_state = RunState::SingleStep {
+                    remaining: remaining - 1,
+                };
+            } else {
+                self.run_state = RunState::Paused;
+            }
+        }
+
+        // TODO: Pause handling
+        // while matches!(self.run_state, RunState::Paused | RunState::Screenshot) {
+        //     thread::sleep(Duration::from_millis(1));
+
+        //     // TODO: The SIGINT stuff
+        //     if self.sigint_received() {
+        //         return ControlFlow::Break(ExitStatus::SigInt);
+        //     }
+
+        //     return ControlFlow::Continue(());
+        // }
+
+        let dt_sign = 1.0f64.copysign(self.dt);
+
+        // TODO: Display pending messages
+
+        if tmax != f64::INFINITY {
+            if self.exact_finish_time {
+                if (self.t + self.dt) * dt_sign >= tmax * dt_sign {
+                    if self.t == tmax {
+                        return ControlFlow::Break(ExitStatus::Success);
+                    } else if matches!(self.run_state, RunState::LastStep) {
+                        let mut tscale = 1e-12 * tmax.abs();
+                        if tscale < f64::MIN_POSITIVE {
+                            tscale = 1e-12;
+                        }
+                        if (self.t - tmax).abs() < tscale {
+                            return ControlFlow::Break(ExitStatus::Success);
+                        } else {
+                            self.synchronize();
+                            self.dt = tmax - self.t;
+                        }
+                    } else {
+                        self.run_state = RunState::LastStep;
+                        self.synchronize();
+                        if self.dt_last_done != 0.0 {
+                            *last_full_dt = self.dt_last_done;
+                        }
+                        self.dt = tmax - self.t;
+                    }
+                } else if matches!(self.run_state, RunState::LastStep) {
+                    self.run_state = RunState::Running;
+                }
+            } else if (self.t * dt_sign) >= (tmax * dt_sign) {
+                return ControlFlow::Break(ExitStatus::Success);
+            }
+        }
+
+        if self.particles.is_empty() {
+            if self.odes.is_empty() {
+                eprintln!("WARNING: No particles or ODE systems in simulation.");
+                return ControlFlow::Break(ExitStatus::NoParticles);
+            } else if matches!(self.integrator, Integrator::Gbs(_)) {
+                eprintln!(
+                    "WARNING: No particles in simulation with GBS integrator. \
+                     Use GBS integrator to integrate user-defined ODEs \
+                     without any particles present."
+                );
+                return ControlFlow::Break(ExitStatus::NoParticles);
+            }
+        }
+
+        ControlFlow::Continue(())
+    }
+
+    pub fn check_boundary(&mut self) {
+        todo!()
+    }
+
+    pub fn update_tree(&mut self) {
+        todo!()
+    }
+
+    pub fn update_tree_gravity_data(&mut self) {
+        todo!()
+    }
+
+    pub fn update_accelerations(&mut self) {
+        todo!()
+    }
+
+    pub fn update_accelerations_for_variational_particles(&mut self) {
+        todo!()
+    }
+
+    pub fn rescale_variational_particles(&mut self) {
+        todo!()
+    }
+
+    pub fn search_collisions(&mut self) {
+        todo!()
+    }
+
+    pub fn get_sync_context(&mut self) -> SyncContext<'_> {
+        SyncContext {
+            particles: &mut self.particles,
+        }
+    }
+
+    pub fn synchronize(&mut self) {
+        let ctx = SyncContext {
+            particles: &mut self.particles,
+            // TODO: add other fields as needed
+        };
+
+        match &mut self.integrator {
+            Integrator::WHFast(w) => w.synchronize(ctx),
+            Integrator::Saba(s) => s.synchronize(ctx),
+            Integrator::Mercurius(m) => m.synchronize(ctx),
+            Integrator::Janus(j) => j.synchronize(ctx),
+            Integrator::Eos(e) => e.synchronize(ctx),
+
+            // No-ops
+            Integrator::Ias15(_)
+            | Integrator::LeapFrog(_)
+            | Integrator::Sei(_)
+            | Integrator::Gbs(_)
+            | Integrator::Trace(_)
+            | Integrator::None => {}
+        }
+    }
+
+    pub fn integrate(&mut self, t_end: f64) -> ExitStatus {
         if t_end != self.t {
             let dt_sign = (t_end - self.t).signum();
             self.dt = self.dt.copysign(dt_sign);
         }
 
-        let last_full_dt = self.dt;
+        let mut last_full_dt = self.dt;
         self.dt_last_done = 0.0;
 
         // TODO: add the warning stuff here
 
-        self.heartbeat();
+        if !matches!(self.run_state, RunState::Paused | RunState::Screenshot) {
+            self.run_state = RunState::Running;
+        }
+
+        match self.run_heartbeat() {
+            ControlFlow::Continue(()) => {}
+            ControlFlow::Break(exit) => return exit,
+        }
+
+        let exit_status = loop {
+            // Check time-based exit / exact-finish logic
+            match self.check_exit(t_end, &mut last_full_dt) {
+                ControlFlow::Continue(()) => {}
+                ControlFlow::Break(exit) => break exit,
+            }
+
+            // TODO: Archive heartbeat (optional)
+            // if self.simulationarchive_filename.is_some() {
+            //     self.simulationarchive_heartbeat();
+            // }
+
+            self.step();
+
+            match self.run_heartbeat() {
+                ControlFlow::Continue(()) => {}
+                ControlFlow::Break(exit) => break exit,
+            }
+
+            if self.sigint_received() {
+                break ExitStatus::SigInt;
+            }
+
+            // TODO: Throttling (optional) usleep stuff
+        };
+
+        self.synchronize();
+
+        if self.exact_finish_time {
+            self.dt = last_full_dt;
+        }
+
+        // TODO: final archive stuff
+        // if self.simulationarchive_filename.is_some() {
+        //     self.simulationarchive_heartbeat();
+        // }
+
+        exit_status
+    }
+
+    pub fn step(&mut self) {
+        if let Some(pre_mod) = self.pre_time_step_modifications {
+            self.synchronize();
+            pre_mod(self);
+            match &mut self.integrator {
+                Integrator::WHFast(w) => {
+                    w.recalculate_coordinates_this_time_step = true;
+                }
+                Integrator::Mercurius(m) => {
+                    m.recalculate_coordinates_this_time_step = true;
+                }
+                _ => {}
+            }
+        }
+
+        self.pre_force_step();
+
+        if self.tree_needs_update
+            || matches!(self.gravity, Gravity::Tree)
+            || matches!(self.collision, Collision::Tree | Collision::LineTree)
+        {
+            self.check_boundary();
+            self.update_tree();
+        }
+
+        if self.tree_root.is_some() && matches!(self.gravity, Gravity::Tree) {
+            self.update_tree_gravity_data();
+        }
+
+        self.update_accelerations();
+
+        if self.n_var.is_some() {
+            self.update_accelerations_for_variational_particles();
+        }
+
+        if let Some(addf) = self.additional_forces {
+            addf(self);
+        }
+
+        self.post_force_step();
+
+        if let Some(post_mod) = self.post_time_step_modifications {
+            self.synchronize();
+            post_mod(self);
+            match &mut self.integrator {
+                Integrator::WHFast(w) => {
+                    w.recalculate_coordinates_this_time_step = true;
+                }
+                Integrator::Mercurius(m) => {
+                    m.recalculate_coordinates_this_time_step = true;
+                }
+                _ => {}
+            }
+        }
+
+        if self.n_var.is_some() {
+            self.rescale_variational_particles();
+        }
+
+        self.check_boundary();
+
+        if self.tree_needs_update {
+            self.update_tree();
+        }
+
+        self.search_collisions();
+
+        self.steps_done += 1;
+    }
+
+    pub fn pre_force_step(&mut self) {
+        let ctx = StepContext {
+            particles: &mut self.particles,
+        };
+
+        self.integrator.pre_force(ctx);
+    }
+
+    pub fn post_force_step(&mut self) {
+        let ctx = StepContext {
+            particles: &mut self.particles,
+        };
+
+        self.integrator.post_force(ctx);
     }
 }
 
@@ -262,12 +607,23 @@ pub enum Boundary {
     Shear,
 }
 
-pub trait Heartbeat {
-    fn heartbeat(&mut self);
+pub enum RunState {
+    Running,
+    Paused,
+    Screenshot,
+    ScreenshotReady,
+    LastStep,
+    SingleStep { remaining: u8 },
 }
 
-impl Heartbeat for Simulation {
-    fn heartbeat(&mut self) {
-        // Default: do nothing
-    }
+#[derive(Copy, Clone)]
+pub enum ExitStatus {
+    Success,
+    GenericError,
+    NoParticles,
+    Encounter,
+    Escape,
+    User,
+    SigInt,
+    Collision,
 }

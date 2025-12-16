@@ -1,19 +1,22 @@
-use crate::particle::Particle;
+use crate::{
+    integrator::{ForceSplitIntegrator, StepContext},
+    particle::Particle,
+};
 
 pub struct Trace {
     pub pericentric_mode: PericentricMode,
     pub r_crit_hill: f64,
     pub peri_crit_eta: f64,
 
-    pub(crate) mode: TraceMode,
-    pub(crate) n_encounter: usize,
-    pub(crate) n_encounter_active: usize,
-    pub(crate) tp_only_encounter: bool,
-    pub(crate) particles_backup: Vec<Particle>,
-    pub(crate) particles_backup_kepler: Vec<Particle>,
-    pub(crate) particles_backup_additional_forces: Vec<Particle>,
-    pub(crate) encounter_map: Vec<usize>,
-    pub(crate) current_ks: Vec<usize>,
+    pub mode: TraceMode,
+    pub n_encounter: usize,
+    pub n_encounter_active: usize,
+    pub tp_only_encounter: bool,
+    pub particles_backup: Vec<Particle>,
+    pub particles_backup_kepler: Vec<Particle>,
+    pub particles_backup_additional_forces: Vec<Particle>,
+    pub encounter_map: Vec<usize>,
+    pub current_ks: Vec<usize>,
 }
 
 impl Trace {
@@ -36,6 +39,16 @@ impl Trace {
         }
 
         self.current_ks = new_ks;
+    }
+}
+
+impl ForceSplitIntegrator for Trace {
+    fn pre_force(&mut self, _ctx: StepContext<'_>) {
+        todo!()
+    }
+
+    fn post_force(&mut self, _ctx: StepContext<'_>) {
+        todo!()
     }
 }
 

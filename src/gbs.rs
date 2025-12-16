@@ -3,7 +3,7 @@
 //! the modified midpoint method to obtain solutions to ordinary
 //! differential equations.
 
-use crate::{collision::CollisionResolver, integrator::Integrator, rendezvous::Simulation};
+use crate::integrator::{ForceSplitIntegrator, StepContext};
 
 pub struct Gbs {
     /// Allowed absolute scalar error
@@ -13,14 +13,24 @@ pub struct Gbs {
     pub min_dt: f64,
     pub max_dt: f64,
 
-    pub(crate) sequence: Vec<usize>,
-    pub(crate) cost_per_step: Vec<usize>,
-    pub(crate) cost_per_time_unit: Vec<f64>,
-    pub(crate) optimal_step: Vec<f64>,
-    pub(crate) coeff: Vec<f64>,
-    pub(crate) dt_proposed: f64,
-    pub(crate) first_or_last_step: bool,
-    pub(crate) previous_rejected: bool,
-    pub(crate) target_iter: usize,
-    pub(crate) user_ode_needs_nbody: bool,
+    pub sequence: Vec<usize>,
+    pub cost_per_step: Vec<usize>,
+    pub cost_per_time_unit: Vec<f64>,
+    pub optimal_step: Vec<f64>,
+    pub coeff: Vec<f64>,
+    pub dt_proposed: f64,
+    pub first_or_last_step: bool,
+    pub previous_rejected: bool,
+    pub target_iter: usize,
+    pub user_ode_needs_nbody: bool,
+}
+
+impl ForceSplitIntegrator for Gbs {
+    fn pre_force(&mut self, _ctx: StepContext<'_>) {
+        todo!()
+    }
+
+    fn post_force(&mut self, _ctx: StepContext<'_>) {
+        todo!()
+    }
 }

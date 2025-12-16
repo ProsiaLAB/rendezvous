@@ -16,11 +16,11 @@ pub struct OdeState {
 }
 
 pub struct OdeInternalState {
-    scale: RVector,
-    c: RVector,
-    d: RMatrix,
-    y1: RVector,
-    y0_dot: RVector,
-    y_dot: RVector,
-    y_temp: RVector,
+    pub scale: RVector,
+    pub c: RVector,
+    pub d: RMatrix,
+    pub y1: RVector,
+    pub y0_dot: RVector,
+    pub y_dot: RVector,
+    pub y_temp: RVector,
 }

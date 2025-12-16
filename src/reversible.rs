@@ -36,7 +36,7 @@ impl Bodies {
         }
     }
 
-    pub fn adjust_sun(&mut self, masses: &[f64], p0: Vector) {
+    pub fn adjust_sun(&mut self, _masses: &[f64], _p0: Vector) {
         // adjustSun
     }
 }
@@ -367,7 +367,7 @@ impl<'a> KeplerSystem<'a> {
     }
 
     #[allow(dead_code)]
-    fn solve_universal_hyperbolic_bisection(&self, x: &mut f64) -> Result<(f64, f64), ()> {
+    fn solve_universal_hyperbolic_bisection(&self, _x: &mut f64) -> Result<(f64, f64), ()> {
         todo!()
     }
 }
