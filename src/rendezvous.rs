@@ -1,11 +1,15 @@
 use std::ops::ControlFlow;
 
+use prosia_extensions::types::Vec3;
+
 use crate::{
-    collision::CollisionResolver,
+    boundary::Boundary,
+    collision::{Collision, CollisionResolver},
+    gravity::{Gravity, GravityContext, IgnoreGravityTerms},
     integrator::{ForceSplitIntegrator, Integrator, StepContext, SyncContext, Synchronizable},
     mercurius::MercuriusMode,
     ode::OdeState,
-    particle::Particle,
+    particle::{Particle, TestParticleType},
     trace::TraceMode,
 };
 
@@ -29,9 +33,13 @@ pub struct Simulation {
     pub root_x: usize,
     pub root_y: usize,
     pub root_z: usize,
-    pub box_size: [f64; 3],
+    pub box_size: Vec3,
     pub n_root: usize,
     pub box_size_max: f64,
+
+    pub n_ghost_x: usize,
+    pub n_ghost_y: usize,
+    pub n_ghost_z: usize,
 
     pub gravity: Gravity,
     pub collision: Collision,
@@ -42,6 +50,13 @@ pub struct Simulation {
     pub exit_max_distance: Option<f64>,
     pub exit_min_distance: Option<f64>,
     pub exact_finish_time: bool,
+    /// This variable determines if the gravity form the
+    /// central object is included in the gravity calculation.
+    ///
+    /// In general, the integrators will set this variable
+    /// automatically and nothing needs to be changed by the user.
+    pub ignore_gravity_terms: IgnoreGravityTerms,
+    pub test_particle_type: TestParticleType,
 
     pub particles: Vec<Particle>,
     pub odes: Vec<OdeState>,
@@ -73,13 +88,18 @@ impl Simulation {
             root_x: 1,
             root_y: 1,
             root_z: 1,
-            box_size: [-1.0, -1.0, -1.0],
+            box_size: Vec3::new(-1.0, -1.0, -1.0),
             n_root: 1,
             box_size_max: -1.0,
+
+            n_ghost_x: 0,
+            n_ghost_y: 0,
+            n_ghost_z: 0,
 
             exit_max_distance: None,
             exit_min_distance: None,
             exact_finish_time: true,
+            ignore_gravity_terms: IgnoreGravityTerms::IgnoreAll,
             run_state: RunState::Running,
 
             heartbeat: None,
@@ -92,6 +112,7 @@ impl Simulation {
             boundary: Boundary::None,
 
             n_active: usize::MAX,
+            test_particle_type: TestParticleType::Massless,
 
             particles: Vec::new(),
             odes: Vec::new(),
@@ -111,14 +132,14 @@ impl Simulation {
         self.root_x = x;
         self.root_y = y;
         self.root_z = z;
-        self.box_size = [
+        self.box_size = Vec3::new(
             root_size * x as f64,
             root_size * y as f64,
             root_size * z as f64,
-        ];
+        );
 
         self.n_root = x * y * z;
-        self.box_size_max = self.box_size.iter().cloned().fold(f64::NAN, f64::max);
+        self.box_size_max = self.box_size.x.max(self.box_size.y).max(self.box_size.z);
         if self.root_x == 0 || self.root_y == 0 || self.root_z == 0 {
             panic!("Number of root cells in each dimension must be positive");
         }
@@ -126,7 +147,7 @@ impl Simulation {
 
     pub fn add(&mut self, p: Particle) {
         if !self.is_particle_in_box(&p) {
-            if self.box_size[0] == 0.0 && self.box_size[1] == 0.0 && self.box_size[2] == 0.0 {
+            if self.box_size.x == 0.0 && self.box_size.y == 0.0 && self.box_size.z == 0.0 {
                 eprintln!(
                     "ERROR: Adding particle outside of box when box size is zero. \
                      Did you forget to configure the box?"
@@ -136,7 +157,7 @@ impl Simulation {
                 eprintln!(
                     "ERROR: Adding particle outside of box. Particle position: ({}, {}, {}), \
                      Box size: ({}, {}, {})",
-                    p.x, p.y, p.z, self.box_size[0], self.box_size[1], self.box_size[2]
+                    p.x, p.y, p.z, self.box_size.x, self.box_size.y, self.box_size.z
                 );
             }
             return;
@@ -149,9 +170,9 @@ impl Simulation {
                 eprintln!("ERROR: Box not configured before adding particles.");
                 return;
             }
-            if p.x.abs() > self.box_size[0] / 2.0
-                || p.y.abs() > self.box_size[1] / 2.0
-                || p.z.abs() > self.box_size[2] / 2.0
+            if p.x.abs() > self.box_size.x / 2.0
+                || p.y.abs() > self.box_size.y / 2.0
+                || p.z.abs() > self.box_size.z / 2.0
             {
                 eprintln!(
                     "ERROR: Particle position outside of box when adding particle. \
@@ -226,22 +247,22 @@ impl Simulation {
     pub fn is_particle_in_box(&self, p: &Particle) -> bool {
         match self.boundary {
             Boundary::Open | Boundary::Shear | Boundary::Periodic => {
-                if p.x > self.box_size[0] / 2.0 {
+                if p.x > self.box_size.x / 2.0 {
                     return false;
                 }
-                if p.x < -self.box_size[0] / 2.0 {
+                if p.x < -self.box_size.x / 2.0 {
                     return false;
                 }
-                if p.y > self.box_size[1] / 2.0 {
+                if p.y > self.box_size.y / 2.0 {
                     return false;
                 }
-                if p.y < -self.box_size[1] / 2.0 {
+                if p.y < -self.box_size.y / 2.0 {
                     return false;
                 }
-                if p.z > self.box_size[2] / 2.0 {
+                if p.z > self.box_size.z / 2.0 {
                     return false;
                 }
-                if p.z < -self.box_size[2] / 2.0 {
+                if p.z < -self.box_size.z / 2.0 {
                     return false;
                 }
 
@@ -391,7 +412,35 @@ impl Simulation {
     }
 
     pub fn update_accelerations(&mut self) {
-        todo!()
+        if !matches!(self.integrator, Integrator::Mercurius(_))
+            && matches!(self.gravity, Gravity::Mercurius)
+        {
+            eprintln!(
+                "WARNING: You are using Mercurius gravity with a non-Mercurius integrator. \
+                 This will likely lead to unexpected behavior. \
+                 Switching to basic gravity."
+            );
+            self.gravity = Gravity::Basic;
+        }
+
+        let mut ctx = GravityContext {
+            particles: &mut self.particles,
+            n: self.n,
+            n_active: self.n_active,
+            g: self.G,
+            t: self.t,
+            integrator: &self.integrator,
+            boundary: &self.boundary,
+            n_ghost_x: self.n_ghost_x,
+            n_ghost_y: self.n_ghost_y,
+            n_ghost_z: self.n_ghost_z,
+            box_size: &self.box_size,
+            ignore_gravity_terms: &self.ignore_gravity_terms,
+            softening: self.softening,
+            test_particle_type: &self.test_particle_type,
+        };
+
+        self.gravity.apply(&mut ctx);
     }
 
     pub fn update_accelerations_for_variational_particles(&mut self) {
@@ -566,45 +615,28 @@ impl Simulation {
     }
 
     pub fn pre_force_step(&mut self) {
-        let ctx = StepContext {
+        let mut ctx = StepContext {
             particles: &mut self.particles,
+            t: &mut self.t,
+            dt: self.dt,
+            dt_last_done: &mut self.dt_last_done,
+            ignore_gravity_terms: &mut self.ignore_gravity_terms,
         };
 
-        self.integrator.pre_force(ctx);
+        self.integrator.pre_force(&mut ctx);
     }
 
     pub fn post_force_step(&mut self) {
-        let ctx = StepContext {
+        let mut ctx = StepContext {
             particles: &mut self.particles,
+            t: &mut self.t,
+            dt: self.dt,
+            dt_last_done: &mut self.dt_last_done,
+            ignore_gravity_terms: &mut self.ignore_gravity_terms,
         };
 
-        self.integrator.post_force(ctx);
+        self.integrator.post_force(&mut ctx);
     }
-}
-
-pub enum Gravity {
-    None,
-    Basic,
-    Compensated,
-    Tree,
-    Mercurius,
-    Jacobi,
-    Trace,
-}
-
-pub enum Collision {
-    None,
-    Direct,
-    Tree,
-    Line,
-    LineTree,
-}
-
-pub enum Boundary {
-    None,
-    Open,
-    Periodic,
-    Shear,
 }
 
 pub enum RunState {
