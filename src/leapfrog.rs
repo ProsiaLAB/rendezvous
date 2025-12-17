@@ -2,16 +2,37 @@
 //! and symplectic. No configuration is available
 //! (the timestep is set in the simulation structure).
 
-use crate::integrator::{ForceSplitIntegrator, StepContext};
+use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
+
+use crate::{
+    gravity::IgnoreGravityTerms,
+    integrator::{ForceSplitIntegrator, StepContext},
+};
 
 pub struct LeapFrog;
 
 impl ForceSplitIntegrator for LeapFrog {
-    fn pre_force(&mut self, _ctx: StepContext<'_>) {
-        todo!()
+    fn pre_force(&mut self, ctx: &mut StepContext<'_>) {
+        *ctx.ignore_gravity_terms = IgnoreGravityTerms::IgnoreAll;
+        ctx.particles.par_iter_mut().for_each(|p| {
+            p.x += 0.5 * ctx.dt * p.vx;
+            p.y += 0.5 * ctx.dt * p.vy;
+            p.z += 0.5 * ctx.dt * p.vz;
+        });
+        *ctx.t += ctx.dt / 2.0;
     }
 
-    fn post_force(&mut self, _ctx: StepContext<'_>) {
-        todo!()
+    fn post_force(&mut self, ctx: &mut StepContext<'_>) {
+        ctx.particles.par_iter_mut().for_each(|p| {
+            p.vx += ctx.dt * p.ax;
+            p.vy += ctx.dt * p.ay;
+            p.vz += ctx.dt * p.az;
+
+            p.x += 0.5 * ctx.dt * p.vx;
+            p.y += 0.5 * ctx.dt * p.vy;
+            p.z += 0.5 * ctx.dt * p.vz;
+        });
+        *ctx.t += ctx.dt / 2.0;
+        *ctx.dt_last_done = ctx.dt;
     }
 }
