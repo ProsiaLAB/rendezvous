@@ -26,11 +26,11 @@ pub struct Gbs {
 }
 
 impl ForceSplitIntegrator for Gbs {
-    fn pre_force(&mut self, _ctx: StepContext<'_>) {
+    fn pre_force(&mut self, _ctx: &mut StepContext<'_>) {
         todo!()
     }
 
-    fn post_force(&mut self, _ctx: StepContext<'_>) {
+    fn post_force(&mut self, _ctx: &mut StepContext<'_>) {
         todo!()
     }
 }

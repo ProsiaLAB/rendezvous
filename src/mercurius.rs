@@ -65,11 +65,11 @@ impl Synchronizable for Mercurius {
 }
 
 impl ForceSplitIntegrator for Mercurius {
-    fn pre_force(&mut self, _ctx: StepContext<'_>) {
+    fn pre_force(&mut self, _ctx: &mut StepContext<'_>) {
         todo!()
     }
 
-    fn post_force(&mut self, _ctx: StepContext<'_>) {
+    fn post_force(&mut self, _ctx: &mut StepContext<'_>) {
         todo!()
     }
 }

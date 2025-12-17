@@ -11,11 +11,11 @@ impl Synchronizable for WHFast {
 }
 
 impl ForceSplitIntegrator for WHFast {
-    fn pre_force(&mut self, _ctx: StepContext<'_>) {
+    fn pre_force(&mut self, _ctx: &mut StepContext<'_>) {
         todo!()
     }
 
-    fn post_force(&mut self, _ctx: StepContext<'_>) {
+    fn post_force(&mut self, _ctx: &mut StepContext<'_>) {
         todo!()
     }
 }
