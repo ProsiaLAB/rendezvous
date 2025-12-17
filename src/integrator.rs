@@ -1,6 +1,7 @@
 use crate::{
-    eos::Eos, gbs::Gbs, ias15::Ias15, janus::Janus, leapfrog::LeapFrog, mercurius::Mercurius,
-    particle::Particle, saba::Saba, sei::Sei, trace::Trace, whfast::WHFast,
+    eos::Eos, gbs::Gbs, gravity::IgnoreGravityTerms, ias15::Ias15, janus::Janus,
+    leapfrog::LeapFrog, mercurius::Mercurius, particle::Particle, saba::Saba, sei::Sei,
+    trace::Trace, whfast::WHFast,
 };
 
 pub enum Integrator {
@@ -18,7 +19,7 @@ pub enum Integrator {
 }
 
 impl ForceSplitIntegrator for Integrator {
-    fn pre_force(&mut self, ctx: StepContext<'_>) {
+    fn pre_force(&mut self, ctx: &mut StepContext<'_>) {
         match self {
             Integrator::WHFast(i) => i.pre_force(ctx),
             Integrator::Saba(i) => i.pre_force(ctx),
@@ -34,7 +35,7 @@ impl ForceSplitIntegrator for Integrator {
         }
     }
 
-    fn post_force(&mut self, ctx: StepContext<'_>) {
+    fn post_force(&mut self, ctx: &mut StepContext<'_>) {
         match self {
             Integrator::WHFast(i) => i.post_force(ctx),
             Integrator::Saba(i) => i.post_force(ctx),
@@ -57,6 +58,10 @@ pub struct SyncContext<'a> {
 
 pub struct StepContext<'a> {
     pub particles: &'a mut [Particle],
+    pub t: &'a mut f64,
+    pub dt: f64,
+    pub dt_last_done: &'a mut f64,
+    pub ignore_gravity_terms: &'a mut IgnoreGravityTerms,
 }
 
 pub trait Synchronizable {
@@ -64,6 +69,6 @@ pub trait Synchronizable {
 }
 
 pub trait ForceSplitIntegrator {
-    fn pre_force(&mut self, ctx: StepContext<'_>);
-    fn post_force(&mut self, ctx: StepContext<'_>);
+    fn pre_force(&mut self, ctx: &mut StepContext<'_>);
+    fn post_force(&mut self, ctx: &mut StepContext<'_>);
 }
