@@ -1,9 +1,10 @@
 use rendezvous::{
-    collision::CollisionResolver,
+    collision::{Collision, CollisionResolver},
+    gravity::Gravity,
     integrator::Integrator,
     leapfrog::LeapFrog,
     particle::Particle,
-    rendezvous::{Collision, Gravity, Simulation},
+    rendezvous::Simulation,
 };
 
 fn main() {
