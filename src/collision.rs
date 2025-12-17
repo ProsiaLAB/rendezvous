@@ -1,3 +1,11 @@
+pub enum Collision {
+    None,
+    Direct,
+    Tree,
+    Line,
+    LineTree,
+}
+
 pub enum CollisionResolver {
     HardSphere,
     Halt,
