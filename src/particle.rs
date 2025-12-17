@@ -18,3 +18,11 @@ pub struct Particle {
     pub last_collision_time: f64,
     pub hash: u64,
 }
+
+/// Type of test particles in the simulation.
+pub enum TestParticleType {
+    /// Active particles feel test particles
+    Massive,
+    /// Active particles do not feel test particles
+    Massless,
+}
