@@ -1,6 +1,6 @@
 //! Implementation of algorithms discussed in [Hernandez & Dehnen (2024)](https://academic.oup.com/mnras/article/530/4/3870/7642878)
 
-use crate::utils::vector::Vector;
+use prosia_extensions::types::Vec3;
 
 pub enum IntegratorError {
     KeplerStepFailed,
@@ -9,12 +9,12 @@ pub enum IntegratorError {
 const G: f64 = 2.9591220828559093e-4; // AU^3 / (day^2 * solar mass) 
 
 pub struct Bodies {
-    pub q: Vec<Vector>,
-    pub v: Vec<Vector>,
+    pub q: Vec<Vec3>,
+    pub v: Vec<Vec3>,
 }
 
 impl Bodies {
-    pub fn momentum(&self, masses: &[f64]) -> Vector {
+    pub fn momentum(&self, masses: &[f64]) -> Vec3 {
         masses
             .iter()
             .zip(self.v.iter())
@@ -23,7 +23,7 @@ impl Bodies {
     }
 
     pub fn map_sun(&mut self, h: f64, masses: &[f64]) {
-        let mut sp = Vector::zero();
+        let mut sp = Vec3::zero();
 
         for (&m, &v) in masses.iter().skip(1).zip(self.v.iter().skip(1)) {
             sp += m * v;
@@ -36,7 +36,7 @@ impl Bodies {
         }
     }
 
-    pub fn adjust_sun(&mut self, _masses: &[f64], _p0: Vector) {
+    pub fn adjust_sun(&mut self, _masses: &[f64], _p0: Vec3) {
         // adjustSun
     }
 }
@@ -124,8 +124,8 @@ impl<'a> Symba<'a> {
 }
 
 struct KeplerSystem<'a> {
-    pub v: &'a mut Vector,
-    pub vd: &'a mut Vector,
+    pub v: &'a mut Vec3,
+    pub vd: &'a mut Vec3,
     pub kc: f64,
     pub dt: f64,
     pub r0: f64,
@@ -136,7 +136,7 @@ struct KeplerSystem<'a> {
 }
 
 impl<'a> KeplerSystem<'a> {
-    fn new(v: &'a mut Vector, vd: &'a mut Vector, kc: f64, dt: f64) -> Self {
+    fn new(v: &'a mut Vec3, vd: &'a mut Vec3, kc: f64, dt: f64) -> Self {
         let v2 = vd.norm().powi(2);
 
         let r0 = v.norm();
@@ -256,13 +256,13 @@ impl<'a> KeplerSystem<'a> {
         let fdot = -bsa;
         let gdothat = -(ca / r);
 
-        let s1 = self.v.x() + fhat * self.v.x() + g * self.vd.x();
-        let s2 = self.v.y() + fhat * self.v.y() + g * self.vd.y();
-        let s3 = self.v.z() + fhat * self.v.z() + g * self.vd.z();
+        let s1 = self.v.x + fhat * self.v.x + g * self.vd.x;
+        let s2 = self.v.y + fhat * self.v.y + g * self.vd.y;
+        let s3 = self.v.z + fhat * self.v.z + g * self.vd.z;
 
-        let s4 = self.vd.x() + fdot * self.v.x() + gdothat * self.vd.x();
-        let s5 = self.vd.y() + fdot * self.v.y() + gdothat * self.vd.y();
-        let s6 = self.vd.z() + fdot * self.v.z() + gdothat * self.vd.z();
+        let s4 = self.vd.x + fdot * self.v.x + gdothat * self.vd.x;
+        let s5 = self.vd.y + fdot * self.v.y + gdothat * self.vd.y;
+        let s6 = self.vd.z + fdot * self.v.z + gdothat * self.vd.z;
 
         self.v.set(s1, s2, s3);
         self.vd.set(s4, s5, s6);
