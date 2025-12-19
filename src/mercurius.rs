@@ -20,6 +20,7 @@ pub struct Mercurius {
     pub particles_backup: Vec<Particle>,
     pub particles_backup_additional_forces: Vec<Particle>,
     pub encounter_map: Vec<usize>,
+    pub switch_fn: SwitchFunction,
 
     pub whfast: WHFast,
     pub ias15: Ias15,
@@ -27,8 +28,71 @@ pub struct Mercurius {
 
 impl Mercurius {
     /// Switching function between close-encounter (IAS15) and long-range (WHFast) integrators.
-    pub fn switch(&self) {
-        todo!()
+    pub fn switch(&self, d: f64, dcrit_max: f64) -> f64 {
+        match self.switch_fn {
+            SwitchFunction::Mercury => Self::switch_mercury(d, dcrit_max),
+            SwitchFunction::Hernandez19C4 => Self::switch_hernandez19_c4(d, dcrit_max),
+            SwitchFunction::Hernandez19C5 => Self::switch_hernandez19_c5(d, dcrit_max),
+            SwitchFunction::Infinity => Self::switch_infinity(d, dcrit_max),
+        }
+    }
+
+    fn switch_mercury(d: f64, dcrit: f64) -> f64 {
+        let y = (d - 0.1 * dcrit) / (0.9 * dcrit);
+        if y < 0.0 {
+            0.0
+        } else if y > 1.0 {
+            1.0
+        } else {
+            10.0 * y * y * y - 15.0 * y * y * y * y + 6.0 * y * y * y * y * y
+        }
+    }
+
+    fn switch_hernandez19_c4(d: f64, dcrit: f64) -> f64 {
+        let y = (d - 0.1 * dcrit) / (0.9 * dcrit);
+        if y < 0.0 {
+            0.0
+        } else if y > 1.0 {
+            1.0
+        } else {
+            (70.0 * y * y * y * y - 315.0 * y * y * y + 540.0 * y * y - 420.0 * y + 126.0)
+                * y
+                * y
+                * y
+                * y
+                * y
+        }
+    }
+
+    fn switch_hernandez19_c5(d: f64, dcrit: f64) -> f64 {
+        let y = (d - 0.1 * dcrit) / (0.9 * dcrit);
+        if y < 0.0 {
+            0.0
+        } else if y > 1.0 {
+            1.0
+        } else {
+            (-252.0 * y * y * y * y * y + 1386.0 * y * y * y * y - 3080.0 * y * y * y
+                + 3465.0 * y * y
+                - 1980.0 * y
+                + 462.0)
+                * y
+                * y
+                * y
+                * y
+                * y
+                * y
+        }
+    }
+
+    fn switch_infinity(d: f64, dcrit: f64) -> f64 {
+        let y = (d - 0.1 * dcrit) / (0.9 * dcrit);
+        if y < 0.0 {
+            0.0
+        } else if y > 1.0 {
+            1.0
+        } else {
+            f(y) / (f(y) + f(1.0 - y))
+        }
     }
 
     pub fn set_dcrit(&mut self, p0: &Particle, pi: &Particle, g: f64, dt: f64, index: usize) {
@@ -75,6 +139,19 @@ impl ForceSplitIntegrator for Mercurius {
 }
 
 pub enum MercuriusMode {
+    /// WHFast
     LongRange,
+    /// IAS15
     CloseEncounter,
+}
+
+pub enum SwitchFunction {
+    Mercury,
+    Hernandez19C4,
+    Hernandez19C5,
+    Infinity,
+}
+
+fn f(x: f64) -> f64 {
+    if x < 0.0 { 0.0 } else { (-1.0 / x).exp() }
 }
