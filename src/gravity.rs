@@ -1,11 +1,15 @@
 use itertools::iproduct;
 use prosia_extensions::types::Vec3;
-use rayon::iter::{IntoParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
+use rayon::iter::{
+    IndexedParallelIterator, IntoParallelIterator, IntoParallelRefMutIterator, ParallelIterator,
+};
 
 use crate::{
     boundary::{Boundary, BoundaryContext, GhostBox},
     integrator::Integrator,
     particle::{Particle, TestParticleType},
+    rendezvous::Tree,
+    tree::{NodeId, NodeKind},
 };
 
 pub enum Gravity {
@@ -33,8 +37,8 @@ pub enum IgnoreGravityTerms {
 impl IgnoreGravityTerms {
     fn for_massive_test_particles(&self, i: usize, j: usize) -> bool {
         match self {
-            IgnoreGravityTerms::IgnoreWHFastwithJacobi => j == 1 && i == 0,
-            IgnoreGravityTerms::IgnoreWHFastwithDHC => j == 0 && i == 0,
+            IgnoreGravityTerms::IgnoreWHFastwithJacobi => (j == 1 && i == 0) || (i == 1 && j == 0),
+            IgnoreGravityTerms::IgnoreWHFastwithDHC => i == 0 || j == 0,
             _ => false,
         }
     }
@@ -46,7 +50,7 @@ impl IgnoreGravityTerms {
 
         match self {
             IgnoreGravityTerms::IgnoreWHFastwithJacobi => (j == 1 && i == 0) || (i == 1 && j == 0),
-            IgnoreGravityTerms::IgnoreWHFastwithDHC => j == 0 && i == 0,
+            IgnoreGravityTerms::IgnoreWHFastwithDHC => j == 0 || i == 0,
             _ => false,
         }
     }
@@ -56,6 +60,7 @@ pub struct GravityContext<'a> {
     pub particles: &'a mut [Particle],
     pub n: usize,
     pub n_active: usize,
+    pub n_root: usize,
     pub g: f64,
     pub t: f64,
     pub integrator: &'a Integrator,
@@ -67,28 +72,13 @@ pub struct GravityContext<'a> {
     pub ignore_gravity_terms: &'a IgnoreGravityTerms,
     pub softening: f64,
     pub test_particle_type: &'a TestParticleType,
+    pub gravity_cs: &'a mut [Vec3],
+    pub tree: Option<&'a Tree>,
+    pub opening_angle: f64,
 }
 
 impl GravityContext<'_> {
-    pub fn get_begin_indices(&self) -> (usize, usize) {
-        let start_i = if matches!(self.ignore_gravity_terms, IgnoreGravityTerms::IgnoreAll) {
-            1
-        } else {
-            2
-        };
-        let start_j = if matches!(
-            self.ignore_gravity_terms,
-            IgnoreGravityTerms::IgnoreWHFastwithDHC
-        ) {
-            1
-        } else {
-            0
-        };
-
-        (start_i, start_j)
-    }
-
-    fn update_accels<F>(
+    fn update_basic<F>(
         &mut self,
         i_range: std::ops::Range<usize>,
         j_range: std::ops::Range<usize>,
@@ -130,6 +120,209 @@ impl GravityContext<'_> {
             p.ax += ax;
             p.ay += ay;
             p.az += az;
+        }
+    }
+
+    fn update_compensated_ij<F>(
+        &mut self,
+        i_range: std::ops::Range<usize>,
+        j_range: std::ops::Range<usize>,
+        soft2: f64,
+        ignore: F,
+    ) where
+        F: Fn(usize, usize) -> bool + Sync,
+    {
+        let updates: Vec<_> = i_range
+            .into_par_iter()
+            .map(|i| {
+                let mut cs = Vec3::new(0.0, 0.0, 0.0);
+                let mut acc = Vec3::new(0.0, 0.0, 0.0);
+
+                for j in j_range.clone() {
+                    if ignore(i, j) {
+                        continue;
+                    }
+
+                    let dx = self.particles[i].x - self.particles[j].x;
+                    let dy = self.particles[i].y - self.particles[j].y;
+                    let dz = self.particles[i].z - self.particles[j].z;
+
+                    let r2 = dx * dx + dy * dy + dz * dz + soft2;
+                    let r = r2.sqrt();
+                    let prefactor = self.g / (r2 * r);
+                    let prefactor_j = -prefactor * self.particles[j].m;
+
+                    let ix = prefactor_j * dx;
+                    let yx = ix - cs.x;
+                    let tx = acc.x + yx;
+                    cs.x = (tx - acc.x) - yx;
+                    acc.x = tx;
+
+                    let iy = prefactor_j * dy;
+                    let yy = iy - cs.y;
+                    let ty = acc.y + yy;
+                    cs.y = (ty - acc.y) - yy;
+                    acc.y = ty;
+
+                    let iz = prefactor_j * dz;
+                    let zy = iz - cs.z;
+                    let tz = acc.z + zy;
+                    cs.z = (tz - acc.z) - zy;
+                    acc.z = tz;
+                }
+                (cs, acc)
+            })
+            .collect();
+
+        for (i, (cs, acc)) in updates.into_iter().enumerate() {
+            self.gravity_cs[i] = cs;
+            self.particles[i].ax = acc.x;
+            self.particles[i].ay = acc.y;
+            self.particles[i].az = acc.z;
+        }
+    }
+
+    fn update_compensated_ji<F>(
+        &mut self,
+        j_range: std::ops::Range<usize>,
+        i_range: std::ops::Range<usize>,
+        soft2: f64,
+        ignore: F,
+    ) where
+        F: Fn(usize, usize) -> bool + Sync,
+    {
+        let updates: Vec<_> = j_range
+            .into_par_iter()
+            .map(|j| {
+                let mut cs = Vec3::new(0.0, 0.0, 0.0);
+                let mut acc = Vec3::new(0.0, 0.0, 0.0);
+
+                for i in i_range.clone() {
+                    if ignore(i, j) {
+                        continue;
+                    }
+
+                    let dx = self.particles[i].x - self.particles[j].x;
+                    let dy = self.particles[i].y - self.particles[j].y;
+                    let dz = self.particles[i].z - self.particles[j].z;
+
+                    let r2 = dx * dx + dy * dy + dz * dz + soft2;
+                    let r = r2.sqrt();
+                    let prefactor = self.g / (r2 * r);
+                    let prefactor_i = prefactor * self.particles[i].m;
+
+                    let ix = prefactor_i * dx;
+                    let yx = ix - cs.x;
+                    let tx = acc.x + yx;
+                    cs.x = (tx - acc.x) - yx;
+                    acc.x = tx;
+
+                    let iy = prefactor_i * dy;
+                    let yy = iy - cs.y;
+                    let ty = acc.y + yy;
+                    cs.y = (ty - acc.y) - yy;
+                    acc.y = ty;
+
+                    let iz = prefactor_i * dz;
+                    let zy = iz - cs.z;
+                    let tz = acc.z + zy;
+                    cs.z = (tz - acc.z) - zy;
+                    acc.z = tz;
+                }
+                (cs, acc)
+            })
+            .collect();
+
+        for (i, (cs, acc)) in updates.into_iter().enumerate() {
+            self.gravity_cs[i] = cs;
+            self.particles[i].ax = acc.x;
+            self.particles[i].ay = acc.y;
+            self.particles[i].az = acc.z;
+        }
+    }
+
+    fn calculate_acceleration_for_particle(
+        &self,
+        pi: usize,
+        gb: &GhostBox,
+        accum: &mut (f64, f64, f64),
+    ) {
+        for i in 0..self.n_root {
+            self.calculate_acceleration_from_node(NodeId(i), pi, gb, accum);
+        }
+    }
+
+    fn calculate_acceleration_from_node(
+        &self,
+        node_id: NodeId,
+        pi: usize,
+        gb: &GhostBox,
+        accum: &mut (f64, f64, f64),
+    ) {
+        let node = self.tree.unwrap().get_node(node_id);
+
+        let soft2 = self.softening * self.softening;
+        let dx = gb.position.x - node.mx;
+        let dy = gb.position.y - node.my;
+        let dz = gb.position.z - node.mz;
+
+        let r2 = dx * dx + dy * dy + dz * dz;
+
+        match node.kind {
+            NodeKind::NonLeaf => {
+                if node.w * node.w > self.opening_angle * r2 {
+                    node.children.iter().for_each(|child_opt| {
+                        if let Some(child_id) = child_opt {
+                            self.calculate_acceleration_from_node(*child_id, pi, gb, accum);
+                        }
+                    });
+                } else {
+                    let r = (r2 + soft2).sqrt();
+                    let prefactor = -self.g / (r * r * r) * node.m;
+
+                    #[cfg(feature = "quadrupole")]
+                    {
+                        let mut q_prefactor = self.g / (r * r * r * r * r);
+                        accum.0 += q_prefactor
+                            * (dx * node.moment.mxx + dy * node.moment.mxy + dz * node.moment.mxz);
+                        accum.1 += q_prefactor
+                            * (dx * node.moment.mxy + dy * node.moment.myy + dz * node.moment.myz);
+                        accum.2 += q_prefactor
+                            * (dx * node.moment.mxz + dy * node.moment.myz + dz * node.moment.mzz);
+
+                        let mrr = node.moment.mxx * dx * dx
+                            + 2.0 * node.moment.mxy * dx * dy
+                            + 2.0 * node.moment.mxz * dx * dz
+                            + node.moment.myy * dy * dy
+                            + 2.0 * node.moment.myz * dy * dz
+                            + node.moment.mzz * dz * dz;
+
+                        q_prefactor *= -5.0 / (2.0 * r * r) * mrr;
+
+                        accum.0 += (q_prefactor + prefactor) * dx;
+                        accum.1 += (q_prefactor + prefactor) * dy;
+                        accum.2 += (q_prefactor + prefactor) * dz;
+                    }
+
+                    #[cfg(not(feature = "quadrupole"))]
+                    {
+                        accum.0 += prefactor * dx;
+                        accum.1 += prefactor * dy;
+                        accum.2 += prefactor * dz;
+                    }
+                }
+            }
+            NodeKind::Leaf(pt) => {
+                if !node.remote && pt == pi {
+                    // Skip self-interaction
+                } else {
+                    let r = (r2 + soft2).sqrt();
+                    let prefactor = -self.g / (r * r * r) * node.m;
+                    accum.0 += prefactor * dx;
+                    accum.1 += prefactor * dy;
+                    accum.2 += prefactor * dz;
+                }
+            }
         }
     }
 
@@ -193,15 +386,7 @@ impl GravityContext<'_> {
         }
     }
 
-    fn apply_basic(&mut self) {
-        let n_active = if self.n_active == usize::MAX {
-            self.n
-        } else {
-            self.n_active
-        };
-
-        let soft2 = self.softening * self.softening;
-
+    fn apply_basic(&mut self, n_active: usize, soft2: f64) {
         self.particles.par_iter_mut().for_each(|p| {
             p.ax = 0.0;
             p.ay = 0.0;
@@ -221,24 +406,85 @@ impl GravityContext<'_> {
         for (gbx, gby, gbz) in iproduct!(-ngx..=ngx, -ngy..=ngy, -ngz..=ngz) {
             let gb = self.boundary.get_ghost_box(&boundary_ctx, gbx, gby, gbz);
 
-            self.update_accels(0..self.n, 0..n_active, soft2, &gb, |i, j| {
+            self.update_basic(0..self.n, 0..n_active, soft2, &gb, |i, j| {
                 self.ignore_gravity_terms.for_active_particles(i, j)
             });
 
             if matches!(self.test_particle_type, TestParticleType::Massive) {
-                self.update_accels(0..n_active, n_active..self.n, soft2, &gb, |i, j| {
+                self.update_basic(0..n_active, n_active..self.n, soft2, &gb, |i, j| {
                     self.ignore_gravity_terms.for_massive_test_particles(i, j)
                 });
             }
         }
     }
 
-    fn apply_compensated(&mut self) {
-        todo!()
+    fn apply_compensated(&mut self, n_active: usize, soft2: f64) {
+        self.particles
+            .par_iter_mut()
+            .take(self.n)
+            .zip(self.gravity_cs.par_iter_mut().take(self.n))
+            .for_each(|(p, cs)| {
+                p.ax = 0.0;
+                p.ay = 0.0;
+                p.az = 0.0;
+
+                cs.x = 0.0;
+                cs.y = 0.0;
+                cs.z = 0.0;
+            });
+
+        self.update_compensated_ij(0..n_active, 0..n_active, soft2, |i, j| {
+            self.ignore_gravity_terms.for_active_particles(i, j)
+        });
+
+        self.update_compensated_ij(n_active..self.n, 0..n_active, soft2, |i, j| {
+            self.ignore_gravity_terms.for_massive_test_particles(i, j)
+        });
+
+        if matches!(self.test_particle_type, TestParticleType::Massive) {
+            self.update_compensated_ji(0..n_active, n_active..self.n, soft2, |i, j| {
+                self.ignore_gravity_terms.for_massive_test_particles(i, j)
+            });
+        }
     }
 
     fn apply_tree(&mut self) {
-        todo!()
+        self.particles.iter_mut().for_each(|p| {
+            p.ax = 0.0;
+            p.ay = 0.0;
+            p.az = 0.0;
+        });
+
+        let ngx = self.n_ghost_x as isize;
+        let ngy = self.n_ghost_y as isize;
+        let ngz = self.n_ghost_z as isize;
+
+        for (gbx, gby, gbz) in iproduct!(-ngx..=ngx, -ngy..=ngy, -ngz..=ngz) {
+            let boundary_ctx = BoundaryContext {
+                t: self.t,
+                box_size: self.box_size,
+                integrator: self.integrator,
+            };
+
+            let accum: Vec<(f64, f64, f64)> = (0..self.particles.len())
+                .into_par_iter()
+                .map(|i| {
+                    let mut gb = self.boundary.get_ghost_box(&boundary_ctx, gbx, gby, gbz);
+                    gb.position.x += self.particles[i].x;
+                    gb.position.y += self.particles[i].y;
+                    gb.position.z += self.particles[i].z;
+                    let mut accum = (0.0, 0.0, 0.0);
+                    self.calculate_acceleration_for_particle(i, &gb, &mut accum);
+                    accum
+                })
+                .collect();
+
+            for (i, (ax, ay, az)) in accum.into_iter().enumerate() {
+                self.particles[i].ax += ax;
+                self.particles[i].ay += ay;
+                self.particles[i].az += az;
+            }
+        }
     }
 
     fn apply_mercurius(&mut self) {
@@ -252,6 +498,13 @@ impl GravityContext<'_> {
 
 impl Gravity {
     pub fn apply(&self, ctx: &mut GravityContext<'_>) {
+        let n_active = if ctx.n_active == usize::MAX {
+            ctx.n
+        } else {
+            ctx.n_active
+        };
+
+        let soft2 = ctx.softening * ctx.softening;
         match self {
             Gravity::None => {
                 ctx.apply_none();
@@ -260,10 +513,10 @@ impl Gravity {
                 ctx.apply_jacobi();
             }
             Gravity::Basic => {
-                ctx.apply_basic();
+                ctx.apply_basic(n_active, soft2);
             }
             Gravity::Compensated => {
-                ctx.apply_compensated();
+                ctx.apply_compensated(n_active, soft2);
             }
             Gravity::Tree => {
                 ctx.apply_tree();
