@@ -13,18 +13,37 @@ use crate::{
     trace::TraceMode,
 };
 
+#[cfg(feature = "quadrupole")]
+use crate::tree::Quadrupole;
+
 type StepDecision = ControlFlow<ExitStatus, ()>;
 
-#[allow(non_snake_case)]
+#[cfg(feature = "quadrupole")]
+pub type TreeParam = Quadrupole;
+
+#[cfg(not(feature = "quadrupole"))]
+pub type TreeParam = ();
+
+pub type Tree = crate::tree::Tree<TreeParam>;
+
 pub struct Simulation {
+    /// Current simulation time. Initialized to zero by default.
     pub t: f64,
-    pub G: f64,
+    /// Gravitational constant. Initialized to 1.0 by default.
+    pub g: f64,
+    /// Gravitational softening. Initialized to 0.0 by default.
     pub softening: f64,
+    /// Time step. Initialized to 0.001 by default.
     pub dt: f64,
+    /// Last successful time step.
     pub dt_last_done: f64,
+    /// Number of steps done.
     pub steps_done: usize,
 
-    pub n: usize,
+    /// Number of *real* particles.
+    /// Corresponds to `(r->N - r->N_var)` in the C version.
+    pub n_real: usize,
+    /// Number of variational particles, if any.
     pub n_var: Option<usize>,
 
     pub run_state: RunState,
@@ -60,6 +79,7 @@ pub struct Simulation {
 
     pub particles: Vec<Particle>,
     pub odes: Vec<OdeState>,
+    pub gravity_cs: Vec<Vec3>,
 
     pub integrator: Integrator,
     /// Executed at each timestep once.
@@ -70,15 +90,16 @@ pub struct Simulation {
     pub pre_time_step_modifications: Option<fn(&mut Self)>,
     pub post_time_step_modifications: Option<fn(&mut Self)>,
 
-    pub tree_root: Option<usize>,
+    pub tree: Option<Tree>,
     pub tree_needs_update: bool,
+    pub opening_angle: f64,
 }
 
 impl Simulation {
     pub fn init(integrator: Integrator) -> Self {
         Simulation {
             t: 0.0,
-            G: 1.0,
+            g: 1.0,
             softening: 0.0,
             dt: 0.01,
             dt_last_done: 0.0,
@@ -103,7 +124,7 @@ impl Simulation {
             run_state: RunState::Running,
 
             heartbeat: None,
-            n: 0,
+            n_real: 0,
             n_var: None,
 
             gravity: Gravity::Basic,
@@ -116,14 +137,16 @@ impl Simulation {
 
             particles: Vec::new(),
             odes: Vec::new(),
+            gravity_cs: Vec::new(),
 
             integrator,
             additional_forces: None,
             pre_time_step_modifications: None,
             post_time_step_modifications: None,
 
-            tree_root: None,
+            tree: None,
             tree_needs_update: false,
+            opening_angle: 0.25,
         }
     }
 
@@ -199,7 +222,7 @@ impl Simulation {
                     let new_index = self.particles.len() - 1;
                     let p0 = &self.particles[0];
                     let pi = &self.particles[new_index];
-                    let g = self.G;
+                    let g = self.g;
                     let dt = self.dt;
                     rim.set_dcrit(p0, pi, g, dt, new_index);
                     if rim.particles_backup.len() < self.particles.len() {
@@ -291,7 +314,7 @@ impl Simulation {
 
         if let Some(max_distance) = self.exit_max_distance {
             let max2 = max_distance * max_distance;
-            for p in self.particles.iter().take(self.n) {
+            for p in self.particles.iter().take(self.n_real) {
                 let r2 = p.x * p.x + p.y * p.y + p.z * p.z;
                 if r2 > max2 {
                     return ControlFlow::Break(ExitStatus::Escape);
@@ -301,7 +324,7 @@ impl Simulation {
 
         if let Some(min_distance) = self.exit_min_distance {
             let min2 = min_distance * min_distance;
-            for i in 0..self.n {
+            for i in 0..self.n_real {
                 let p = &self.particles[i];
                 for j in 0..i {
                     let q = &self.particles[j];
@@ -423,11 +446,19 @@ impl Simulation {
             self.gravity = Gravity::Basic;
         }
 
+        if matches!(self.gravity, Gravity::Compensated)
+            && self.gravity_cs.len() < self.particles.len()
+        {
+            self.gravity_cs
+                .resize(self.particles.len(), Vec3::new(0.0, 0.0, 0.0));
+        }
+
         let mut ctx = GravityContext {
             particles: &mut self.particles,
-            n: self.n,
+            n: self.n_real,
             n_active: self.n_active,
-            g: self.G,
+            n_root: self.n_root,
+            g: self.g,
             t: self.t,
             integrator: &self.integrator,
             boundary: &self.boundary,
@@ -438,6 +469,9 @@ impl Simulation {
             ignore_gravity_terms: &self.ignore_gravity_terms,
             softening: self.softening,
             test_particle_type: &self.test_particle_type,
+            gravity_cs: &mut self.gravity_cs,
+            tree: self.tree.as_ref(),
+            opening_angle: self.opening_angle,
         };
 
         self.gravity.apply(&mut ctx);
@@ -569,7 +603,7 @@ impl Simulation {
             self.update_tree();
         }
 
-        if self.tree_root.is_some() && matches!(self.gravity, Gravity::Tree) {
+        if self.tree.is_some() && matches!(self.gravity, Gravity::Tree) {
             self.update_tree_gravity_data();
         }
 
