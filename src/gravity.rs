@@ -7,6 +7,7 @@ use rayon::iter::{
 use crate::{
     boundary::{Boundary, BoundaryContext, GhostBox},
     integrator::Integrator,
+    mercurius::{Mercurius, MercuriusMode},
     particle::{Particle, TestParticleType},
     rendezvous::Tree,
     tree::{NodeId, NodeKind},
@@ -58,7 +59,7 @@ impl IgnoreGravityTerms {
 
 pub struct GravityContext<'a> {
     pub particles: &'a mut [Particle],
-    pub n: usize,
+    pub n_real: usize,
     pub n_active: usize,
     pub n_root: usize,
     pub g: f64,
@@ -406,12 +407,12 @@ impl GravityContext<'_> {
         for (gbx, gby, gbz) in iproduct!(-ngx..=ngx, -ngy..=ngy, -ngz..=ngz) {
             let gb = self.boundary.get_ghost_box(&boundary_ctx, gbx, gby, gbz);
 
-            self.update_basic(0..self.n, 0..n_active, soft2, &gb, |i, j| {
+            self.update_basic(0..self.n_real, 0..n_active, soft2, &gb, |i, j| {
                 self.ignore_gravity_terms.for_active_particles(i, j)
             });
 
             if matches!(self.test_particle_type, TestParticleType::Massive) {
-                self.update_basic(0..n_active, n_active..self.n, soft2, &gb, |i, j| {
+                self.update_basic(0..n_active, n_active..self.n_real, soft2, &gb, |i, j| {
                     self.ignore_gravity_terms.for_massive_test_particles(i, j)
                 });
             }
@@ -421,8 +422,8 @@ impl GravityContext<'_> {
     fn apply_compensated(&mut self, n_active: usize, soft2: f64) {
         self.particles
             .par_iter_mut()
-            .take(self.n)
-            .zip(self.gravity_cs.par_iter_mut().take(self.n))
+            .take(self.n_real)
+            .zip(self.gravity_cs.par_iter_mut().take(self.n_real))
             .for_each(|(p, cs)| {
                 p.ax = 0.0;
                 p.ay = 0.0;
@@ -437,12 +438,12 @@ impl GravityContext<'_> {
             self.ignore_gravity_terms.for_active_particles(i, j)
         });
 
-        self.update_compensated_ij(n_active..self.n, 0..n_active, soft2, |i, j| {
+        self.update_compensated_ij(n_active..self.n_real, 0..n_active, soft2, |i, j| {
             self.ignore_gravity_terms.for_massive_test_particles(i, j)
         });
 
         if matches!(self.test_particle_type, TestParticleType::Massive) {
-            self.update_compensated_ji(0..n_active, n_active..self.n, soft2, |i, j| {
+            self.update_compensated_ji(0..n_active, n_active..self.n_real, soft2, |i, j| {
                 self.ignore_gravity_terms.for_massive_test_particles(i, j)
             });
         }
@@ -487,8 +488,189 @@ impl GravityContext<'_> {
         }
     }
 
-    fn apply_mercurius(&mut self) {
-        todo!()
+    fn apply_mercurius(&mut self, n_active: usize, soft2: f64) {
+        match self.integrator {
+            Integrator::Mercurius(i) => match i.mode {
+                MercuriusMode::LongRange => {
+                    self.apply_mercurius_long_range(i, n_active, soft2);
+                }
+                MercuriusMode::CloseEncounter => {
+                    self.apply_mercurius_close_encounter(i, soft2);
+                }
+            },
+            _ => {
+                eprintln!(
+                    "WARNING: Mercurius gravity is intended to be used with the Mercurius integrator."
+                )
+            }
+        }
+    }
+
+    fn apply_mercurius_long_range(&mut self, m: &Mercurius, n_active: usize, soft2: f64) {
+        self.particles[0].ax = 0.0;
+        self.particles[0].ay = 0.0;
+        self.particles[0].az = 0.0;
+
+        let accels: Vec<(f64, f64, f64)> = (1..self.n_real)
+            .into_par_iter()
+            .map(|i| {
+                let mut ax = 0.0;
+                let mut ay = 0.0;
+                let mut az = 0.0;
+
+                for j in 1..n_active {
+                    if i == j {
+                        continue;
+                    }
+
+                    let dx = self.particles[i].x - self.particles[j].x;
+                    let dy = self.particles[i].y - self.particles[j].y;
+                    let dz = self.particles[i].z - self.particles[j].z;
+
+                    let dr = (dx * dx + dy * dy + dz * dz + soft2).sqrt();
+                    let dcrit_max = m.dcrit[i].max(m.dcrit[j]);
+                    let val = m.switch(dr, dcrit_max);
+                    let prefactor = -self.g * self.particles[j].m * val / (dr * dr * dr);
+                    ax += prefactor * dx;
+                    ay += prefactor * dy;
+                    az += prefactor * dz;
+                }
+                (ax, ay, az)
+            })
+            .collect();
+
+        for (i, (ax, ay, az)) in accels.into_iter().enumerate() {
+            self.particles[i + 1].ax = ax;
+            self.particles[i + 1].ay = ay;
+            self.particles[i + 1].az = az;
+        }
+
+        if matches!(self.test_particle_type, TestParticleType::Massive) {
+            let accels_tp: Vec<(f64, f64, f64)> = (1..n_active)
+                .into_par_iter()
+                .map(|i| {
+                    let mut ax = 0.0;
+                    let mut ay = 0.0;
+                    let mut az = 0.0;
+
+                    for j in n_active..self.n_real {
+                        let dx = self.particles[i].x - self.particles[j].x;
+                        let dy = self.particles[i].y - self.particles[j].y;
+                        let dz = self.particles[i].z - self.particles[j].z;
+
+                        let dr = (dx * dx + dy * dy + dz * dz + soft2).sqrt();
+                        let dcrit_max = m.dcrit[i].max(m.dcrit[j]);
+                        let val = m.switch(dr, dcrit_max);
+                        let prefactor = -self.g * self.particles[j].m * val / (dr * dr * dr);
+                        ax += prefactor * dx;
+                        ay += prefactor * dy;
+                        az += prefactor * dz;
+                    }
+                    (ax, ay, az)
+                })
+                .collect();
+
+            for (i, (ax, ay, az)) in accels_tp.into_iter().enumerate() {
+                self.particles[i + 1].ax += ax;
+                self.particles[i + 1].ay += ay;
+                self.particles[i + 1].az += az;
+            }
+        }
+    }
+
+    fn apply_mercurius_close_encounter(&mut self, m: &Mercurius, soft2: f64) {
+        self.particles[0].ax = 0.0;
+        self.particles[0].ay = 0.0;
+        self.particles[0].az = 0.0;
+
+        // In heliocentric coordinates, the star feels no acceleration
+        let accels: Vec<(f64, f64, f64)> = (1..m.n_encounter)
+            .into_par_iter()
+            .map(|i| {
+                let mi = m.encounter_map[i];
+
+                let mut ax = 0.0;
+                let mut ay = 0.0;
+                let mut az = 0.0;
+
+                // Acceleration due to star
+                let x = self.particles[mi].x;
+                let y = self.particles[mi].y;
+                let z = self.particles[mi].z;
+                let r = (x * x + y * y + z * z + soft2).sqrt();
+                let prefactor = -self.g / (r * r * r) * self.particles[0].m;
+                ax += prefactor * x;
+                ay += prefactor * y;
+                az += prefactor * z;
+
+                for j in 1..m.n_encounter_active {
+                    if i == j {
+                        continue;
+                    }
+
+                    let mj = m.encounter_map[j];
+
+                    let dx = x - self.particles[mj].x;
+                    let dy = y - self.particles[mj].y;
+                    let dz = z - self.particles[mj].z;
+                    let r = (dx * dx + dy * dy + dz * dz + soft2).sqrt();
+                    let dcrit_max = m.dcrit[mi].max(m.dcrit[mj]);
+                    let val = m.switch(r, dcrit_max);
+                    let prefactor = -self.g * self.particles[mj].m * (1.0 - val) / (r * r * r);
+                    ax += prefactor * dx;
+                    ay += prefactor * dy;
+                    az += prefactor * dz;
+                }
+                (ax, ay, az)
+            })
+            .collect();
+
+        for (i, (ax, ay, az)) in accels.into_iter().enumerate() {
+            let mi = m.encounter_map[i + 1];
+            self.particles[mi].ax = ax;
+            self.particles[mi].ay = ay;
+            self.particles[mi].az = az;
+        }
+
+        if matches!(self.test_particle_type, TestParticleType::Massive) {
+            let accels: Vec<(f64, f64, f64)> = (1..m.n_encounter_active)
+                .into_par_iter()
+                .map(|i| {
+                    let mi = m.encounter_map[i];
+
+                    let mut ax = 0.0;
+                    let mut ay = 0.0;
+                    let mut az = 0.0;
+
+                    let x = self.particles[mi].x;
+                    let y = self.particles[mi].y;
+                    let z = self.particles[mi].z;
+
+                    for j in m.n_encounter_active..m.n_encounter {
+                        let mj = m.encounter_map[j];
+
+                        let dx = x - self.particles[mj].x;
+                        let dy = y - self.particles[mj].y;
+                        let dz = z - self.particles[mj].z;
+                        let r = (dx * dx + dy * dy + dz * dz + soft2).sqrt();
+                        let dcrit_max = m.dcrit[mi].max(m.dcrit[mj]);
+                        let val = m.switch(r, dcrit_max);
+                        let prefactor = -self.g * self.particles[mj].m * (1.0 - val) / (r * r * r);
+                        ax += prefactor * dx;
+                        ay += prefactor * dy;
+                        az += prefactor * dz;
+                    }
+                    (ax, ay, az)
+                })
+                .collect();
+
+            for (i, (ax, ay, az)) in accels.into_iter().enumerate() {
+                let mi = m.encounter_map[i + 1];
+                self.particles[mi].ax += ax;
+                self.particles[mi].ay += ay;
+                self.particles[mi].az += az;
+            }
+        }
     }
 
     fn apply_trace(&mut self) {
@@ -499,7 +681,7 @@ impl GravityContext<'_> {
 impl Gravity {
     pub fn apply(&self, ctx: &mut GravityContext<'_>) {
         let n_active = if ctx.n_active == usize::MAX {
-            ctx.n
+            ctx.n_real
         } else {
             ctx.n_active
         };
@@ -522,7 +704,7 @@ impl Gravity {
                 ctx.apply_tree();
             }
             Gravity::Mercurius => {
-                ctx.apply_mercurius();
+                ctx.apply_mercurius(n_active, soft2);
             }
             Gravity::Trace => {
                 ctx.apply_trace();
