@@ -671,14 +671,14 @@ impl GravityContext<'_> {
         }
     }
 
-    fn apply_trace(&mut self) {
+    fn apply_trace(&mut self, n_active: usize, soft2: f64) {
         match self.integrator {
             Integrator::Trace(t) => match t.mode {
                 TraceMode::Interaction => {
-                    self.apply_trace_interaction(t);
+                    self.apply_trace_interaction(t, n_active, soft2);
                 }
                 TraceMode::Kepler => {
-                    self.apply_trace_kepler(t);
+                    self.apply_trace_kepler(t, soft2);
                 }
                 _ => {}
             },
@@ -690,12 +690,175 @@ impl GravityContext<'_> {
         }
     }
 
-    fn apply_trace_interaction(&mut self, t: &Trace) {
-        todo!()
+    fn apply_trace_interaction(&mut self, t: &Trace, n_active: usize, soft2: f64) {
+        let n = self.particles.len();
+
+        self.particles[0].ax = 0.0;
+        self.particles[0].ay = 0.0;
+        self.particles[0].az = 0.0;
+
+        let accels: Vec<(f64, f64, f64)> = (1..self.n_real)
+            .into_par_iter()
+            .map(|i| {
+                let mut ax = 0.0;
+                let mut ay = 0.0;
+                let mut az = 0.0;
+
+                for j in 1..n_active {
+                    if i == j {
+                        continue;
+                    }
+
+                    if t.current_ks[j * n + i] != 0 {
+                        continue;
+                    }
+
+                    let dx = self.particles[i].x - self.particles[j].x;
+                    let dy = self.particles[i].y - self.particles[j].y;
+                    let dz = self.particles[i].z - self.particles[j].z;
+
+                    let dr = (dx * dx + dy * dy + dz * dz + soft2).sqrt();
+                    let prefactor = -self.g * self.particles[j].m / (dr * dr * dr);
+                    ax += prefactor * dx;
+                    ay += prefactor * dy;
+                    az += prefactor * dz;
+                }
+                (ax, ay, az)
+            })
+            .collect();
+
+        for (i, (ax, ay, az)) in accels.into_iter().enumerate() {
+            self.particles[i + 1].ax = ax;
+            self.particles[i + 1].ay = ay;
+            self.particles[i + 1].az = az;
+        }
+
+        if matches!(self.test_particle_type, TestParticleType::Massive) {
+            let accels_tp: Vec<(f64, f64, f64)> = (1..n_active)
+                .into_par_iter()
+                .map(|i| {
+                    let mut ax = 0.0;
+                    let mut ay = 0.0;
+                    let mut az = 0.0;
+
+                    for j in n_active..self.n_real {
+                        if t.current_ks[j * n + i] != 0 {
+                            continue;
+                        }
+
+                        let dx = self.particles[i].x - self.particles[j].x;
+                        let dy = self.particles[i].y - self.particles[j].y;
+                        let dz = self.particles[i].z - self.particles[j].z;
+
+                        let dr = (dx * dx + dy * dy + dz * dz + soft2).sqrt();
+                        let prefactor = -self.g * self.particles[j].m / (dr * dr * dr);
+                        ax += prefactor * dx;
+                        ay += prefactor * dy;
+                        az += prefactor * dz;
+                    }
+                    (ax, ay, az)
+                })
+                .collect();
+
+            for (i, (ax, ay, az)) in accels_tp.into_iter().enumerate() {
+                self.particles[i + 1].ax += ax;
+                self.particles[i + 1].ay += ay;
+                self.particles[i + 1].az += az;
+            }
+        }
     }
 
-    fn apply_trace_kepler(&mut self, t: &Trace) {
-        todo!()
+    fn apply_trace_kepler(&mut self, t: &Trace, soft2: f64) {
+        self.particles[0].ax = 0.0;
+        self.particles[0].ay = 0.0;
+        self.particles[0].az = 0.0;
+
+        let accels: Vec<(f64, f64, f64)> = (1..t.n_encounter)
+            .into_par_iter()
+            .map(|i| {
+                let mi = t.encounter_map[i];
+
+                let mut ax = 0.0;
+                let mut ay = 0.0;
+                let mut az = 0.0;
+
+                // Acceleration due to star
+                let x = self.particles[mi].x;
+                let y = self.particles[mi].y;
+                let z = self.particles[mi].z;
+
+                let r = (x * x + y * y + z * z + soft2).sqrt();
+                let prefactor = -self.g / (r * r * r) * self.particles[0].m;
+                ax += prefactor * x;
+                ay += prefactor * y;
+                az += prefactor * z;
+
+                for j in 1..t.n_encounter_active {
+                    if i == j {
+                        continue;
+                    }
+
+                    let mj = t.encounter_map[j];
+
+                    let dx = x - self.particles[mj].x;
+                    let dy = y - self.particles[mj].y;
+                    let dz = z - self.particles[mj].z;
+
+                    let dr = (dx * dx + dy * dy + dz * dz + soft2).sqrt();
+                    let prefactor = -self.g * self.particles[mj].m / (dr * dr * dr);
+                    ax += prefactor * dx;
+                    ay += prefactor * dy;
+                    az += prefactor * dz;
+                }
+                (ax, ay, az)
+            })
+            .collect();
+
+        for (i, (ax, ay, az)) in accels.into_iter().enumerate() {
+            let mi = t.encounter_map[i + 1];
+            self.particles[mi].ax = ax;
+            self.particles[mi].ay = ay;
+            self.particles[mi].az = az;
+        }
+
+        if matches!(self.test_particle_type, TestParticleType::Massive) {
+            let accels: Vec<(f64, f64, f64)> = (1..t.n_encounter_active)
+                .into_par_iter()
+                .map(|i| {
+                    let mi = t.encounter_map[i];
+
+                    let mut ax = 0.0;
+                    let mut ay = 0.0;
+                    let mut az = 0.0;
+
+                    let x = self.particles[mi].x;
+                    let y = self.particles[mi].y;
+                    let z = self.particles[mi].z;
+
+                    for j in t.n_encounter_active..t.n_encounter {
+                        let mj = t.encounter_map[j];
+
+                        let dx = x - self.particles[mj].x;
+                        let dy = y - self.particles[mj].y;
+                        let dz = z - self.particles[mj].z;
+
+                        let dr = (dx * dx + dy * dy + dz * dz + soft2).sqrt();
+                        let prefactor = -self.g * self.particles[mj].m / (dr * dr * dr);
+                        ax += prefactor * dx;
+                        ay += prefactor * dy;
+                        az += prefactor * dz;
+                    }
+                    (ax, ay, az)
+                })
+                .collect();
+
+            for (i, (ax, ay, az)) in accels.into_iter().enumerate() {
+                let mi = t.encounter_map[i + 1];
+                self.particles[mi].ax += ax;
+                self.particles[mi].ay += ay;
+                self.particles[mi].az += az;
+            }
+        }
     }
 }
 
@@ -728,7 +891,7 @@ impl Gravity {
                 ctx.apply_mercurius(n_active, soft2);
             }
             Gravity::Trace => {
-                ctx.apply_trace();
+                ctx.apply_trace(n_active, soft2);
             }
         }
     }
