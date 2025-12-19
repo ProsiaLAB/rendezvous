@@ -4,10 +4,9 @@
 
 use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
 
-use crate::{
-    gravity::IgnoreGravityTerms,
-    integrator::{ForceSplitIntegrator, StepContext},
-};
+use crate::gravity::IgnoreGravityTerms;
+use crate::integrator::ForceSplitIntegrator;
+use crate::integrator::StepContext;
 
 pub struct LeapFrog;
 

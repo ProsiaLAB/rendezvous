@@ -1,4 +1,5 @@
-use crate::integrator::{ForceSplitIntegrator, StepContext};
+use crate::integrator::ForceSplitIntegrator;
+use crate::integrator::StepContext;
 
 pub struct Ias15 {
     pub epsilon: f64,

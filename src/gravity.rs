@@ -4,14 +4,12 @@ use rayon::iter::{
     IndexedParallelIterator, IntoParallelIterator, IntoParallelRefMutIterator, ParallelIterator,
 };
 
-use crate::{
-    boundary::{Boundary, BoundaryContext, GhostBox},
-    integrator::Integrator,
-    mercurius::{Mercurius, MercuriusMode},
-    particle::{Particle, TestParticleType},
-    rendezvous::Tree,
-    tree::{NodeId, NodeKind},
-};
+use crate::boundary::{Boundary, BoundaryContext, GhostBox};
+use crate::integrator::Integrator;
+use crate::mercurius::{Mercurius, MercuriusMode};
+use crate::particle::{Particle, TestParticleType};
+use crate::trace::{Trace, TraceMode};
+use crate::tree::{NodeId, NodeKind, TreeType};
 
 pub enum Gravity {
     None,
@@ -74,7 +72,7 @@ pub struct GravityContext<'a> {
     pub softening: f64,
     pub test_particle_type: &'a TestParticleType,
     pub gravity_cs: &'a mut [Vec3],
-    pub tree: Option<&'a Tree>,
+    pub tree: Option<&'a TreeType>,
     pub opening_angle: f64,
 }
 
@@ -490,12 +488,12 @@ impl GravityContext<'_> {
 
     fn apply_mercurius(&mut self, n_active: usize, soft2: f64) {
         match self.integrator {
-            Integrator::Mercurius(i) => match i.mode {
+            Integrator::Mercurius(m) => match m.mode {
                 MercuriusMode::LongRange => {
-                    self.apply_mercurius_long_range(i, n_active, soft2);
+                    self.apply_mercurius_long_range(m, n_active, soft2);
                 }
                 MercuriusMode::CloseEncounter => {
-                    self.apply_mercurius_close_encounter(i, soft2);
+                    self.apply_mercurius_close_encounter(m, soft2);
                 }
             },
             _ => {
@@ -674,6 +672,29 @@ impl GravityContext<'_> {
     }
 
     fn apply_trace(&mut self) {
+        match self.integrator {
+            Integrator::Trace(t) => match t.mode {
+                TraceMode::Interaction => {
+                    self.apply_trace_interaction(t);
+                }
+                TraceMode::Kepler => {
+                    self.apply_trace_kepler(t);
+                }
+                _ => {}
+            },
+            _ => {
+                eprintln!(
+                    "WARNING: Trace gravity is intended to be used with the Trace integrator."
+                )
+            }
+        }
+    }
+
+    fn apply_trace_interaction(&mut self, t: &Trace) {
+        todo!()
+    }
+
+    fn apply_trace_kepler(&mut self, t: &Trace) {
         todo!()
     }
 }

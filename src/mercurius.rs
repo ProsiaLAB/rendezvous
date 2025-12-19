@@ -1,9 +1,9 @@
-use crate::{
-    ias15::Ias15,
-    integrator::{ForceSplitIntegrator, StepContext, SyncContext, Synchronizable},
-    particle::Particle,
-    whfast::WHFast,
-};
+use crate::integrator::{ForceSplitIntegrator, Synchronizable};
+use crate::integrator::{StepContext, SyncContext};
+use crate::particle::Particle;
+
+use crate::ias15::Ias15;
+use crate::whfast::WHFast;
 
 pub struct Mercurius {
     pub r_crit_hill: f64,
@@ -92,6 +92,38 @@ impl Mercurius {
             1.0
         } else {
             f(y) / (f(y) + f(1.0 - y))
+        }
+    }
+
+    pub fn update_encounters(&mut self, g: f64, dt: f64, n_active: usize, particles: &[Particle]) {
+        match self.mode {
+            MercuriusMode::LongRange => {
+                // WHFast mode
+                self.recalculate_r_crit_this_time_step = true;
+                self.recalculate_coordinates_this_time_step = true;
+            }
+            MercuriusMode::CloseEncounter => {
+                // IAS15 mode
+                self.ias15.reset();
+                if self.dcrit.len() < particles.len() {
+                    self.dcrit.resize(particles.len(), 0.0);
+                }
+                let new_index = particles.len() - 1;
+                let p0 = &particles[0];
+                let pi = &particles[new_index];
+                self.set_dcrit(p0, pi, g, dt, new_index);
+                if self.particles_backup.len() < particles.len() {
+                    self.particles_backup
+                        .resize(particles.len(), Particle::default());
+                    self.particles_backup_additional_forces
+                        .resize(particles.len(), Particle::default());
+                }
+                self.encounter_map.push(new_index);
+                self.n_encounter += 1;
+                if n_active == usize::MAX {
+                    self.n_encounter_active += 1;
+                }
+            }
         }
     }
 

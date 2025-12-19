@@ -1,4 +1,5 @@
-use crate::integrator::{ForceSplitIntegrator, StepContext, SyncContext, Synchronizable};
+use crate::integrator::{ForceSplitIntegrator, Synchronizable};
+use crate::integrator::{StepContext, SyncContext};
 
 pub struct Saba;
 

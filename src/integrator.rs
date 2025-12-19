@@ -1,8 +1,16 @@
-use crate::{
-    eos::Eos, gbs::Gbs, gravity::IgnoreGravityTerms, ias15::Ias15, janus::Janus,
-    leapfrog::LeapFrog, mercurius::Mercurius, particle::Particle, saba::Saba, sei::Sei,
-    trace::Trace, whfast::WHFast,
-};
+use crate::gravity::IgnoreGravityTerms;
+use crate::particle::Particle;
+
+use crate::eos::Eos;
+use crate::gbs::Gbs;
+use crate::ias15::Ias15;
+use crate::janus::Janus;
+use crate::leapfrog::LeapFrog;
+use crate::mercurius::Mercurius;
+use crate::saba::Saba;
+use crate::sei::Sei;
+use crate::trace::Trace;
+use crate::whfast::WHFast;
 
 pub enum Integrator {
     Ias15(Ias15),

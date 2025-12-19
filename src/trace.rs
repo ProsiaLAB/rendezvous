@@ -1,7 +1,6 @@
-use crate::{
-    integrator::{ForceSplitIntegrator, StepContext},
-    particle::Particle,
-};
+use crate::integrator::ForceSplitIntegrator;
+use crate::integrator::StepContext;
+use crate::particle::Particle;
 
 pub struct Trace {
     pub pericentric_mode: PericentricMode,
@@ -39,6 +38,30 @@ impl Trace {
         }
 
         self.current_ks = new_ks;
+    }
+
+    pub fn update_encounters(&mut self, n_active: usize, particles: &[Particle]) {
+        if matches!(self.mode, TraceMode::Kepler | TraceMode::Full) {
+            // GBS part
+            let new_n = particles.len();
+            let old_n = new_n - 1;
+
+            self.particles_backup.resize(new_n, Particle::default());
+            self.particles_backup_kepler
+                .resize(new_n, Particle::default());
+            self.particles_backup_additional_forces
+                .resize(new_n, Particle::default());
+            self.resize_current_ks(old_n, new_n);
+            for &p in self.encounter_map.iter().skip(1) {
+                self.current_ks[p * new_n + old_n] = 1;
+            }
+
+            self.encounter_map.push(old_n);
+            self.n_encounter += 1;
+            if n_active == usize::MAX {
+                self.n_encounter_active += 1;
+            }
+        }
     }
 }
 

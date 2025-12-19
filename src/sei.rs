@@ -1,4 +1,5 @@
-use crate::integrator::{ForceSplitIntegrator, StepContext};
+use crate::integrator::ForceSplitIntegrator;
+use crate::integrator::StepContext;
 
 pub struct Sei {
     pub omega: f64,

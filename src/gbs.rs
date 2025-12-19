@@ -3,7 +3,8 @@
 //! the modified midpoint method to obtain solutions to ordinary
 //! differential equations.
 
-use crate::integrator::{ForceSplitIntegrator, StepContext};
+use crate::integrator::ForceSplitIntegrator;
+use crate::integrator::StepContext;
 
 pub struct Gbs {
     /// Allowed absolute scalar error

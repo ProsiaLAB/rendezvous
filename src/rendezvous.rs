@@ -2,29 +2,16 @@ use std::ops::ControlFlow;
 
 use prosia_extensions::types::Vec3;
 
-use crate::{
-    boundary::Boundary,
-    collision::{Collision, CollisionResolver},
-    gravity::{Gravity, GravityContext, IgnoreGravityTerms},
-    integrator::{ForceSplitIntegrator, Integrator, StepContext, SyncContext, Synchronizable},
-    mercurius::MercuriusMode,
-    ode::OdeState,
-    particle::{Particle, TestParticleType},
-    trace::TraceMode,
-};
-
-#[cfg(feature = "quadrupole")]
-use crate::tree::Quadrupole;
+use crate::boundary::Boundary;
+use crate::collision::{Collision, CollisionResolver};
+use crate::gravity::{Gravity, GravityContext, IgnoreGravityTerms};
+use crate::integrator::{ForceSplitIntegrator, Synchronizable};
+use crate::integrator::{Integrator, StepContext, SyncContext};
+use crate::ode::OdeState;
+use crate::particle::{Particle, TestParticleType};
+use crate::tree::TreeType;
 
 type StepDecision = ControlFlow<ExitStatus, ()>;
-
-#[cfg(feature = "quadrupole")]
-pub type TreeParam = Quadrupole;
-
-#[cfg(not(feature = "quadrupole"))]
-pub type TreeParam = ();
-
-pub type Tree = crate::tree::Tree<TreeParam>;
 
 pub struct Simulation {
     /// Current simulation time. Initialized to zero by default.
@@ -90,7 +77,7 @@ pub struct Simulation {
     pub pre_time_step_modifications: Option<fn(&mut Self)>,
     pub post_time_step_modifications: Option<fn(&mut Self)>,
 
-    pub tree: Option<Tree>,
+    pub tree: Option<TreeType>,
     pub tree_needs_update: bool,
     pub opening_angle: f64,
 }
@@ -207,61 +194,11 @@ impl Simulation {
         self.particles.push(p);
 
         match &mut self.integrator {
-            Integrator::Mercurius(rim) => match rim.mode {
-                MercuriusMode::LongRange => {
-                    // WHFast mode
-                    rim.recalculate_r_crit_this_time_step = true;
-                    rim.recalculate_coordinates_this_time_step = true;
-                }
-                MercuriusMode::CloseEncounter => {
-                    // IAS15 mode
-                    rim.ias15.reset();
-                    if rim.dcrit.len() < self.particles.len() {
-                        rim.dcrit.resize(self.particles.len(), 0.0);
-                    }
-                    let new_index = self.particles.len() - 1;
-                    let p0 = &self.particles[0];
-                    let pi = &self.particles[new_index];
-                    let g = self.g;
-                    let dt = self.dt;
-                    rim.set_dcrit(p0, pi, g, dt, new_index);
-                    if rim.particles_backup.len() < self.particles.len() {
-                        rim.particles_backup
-                            .resize(self.particles.len(), Particle::default());
-                        rim.particles_backup_additional_forces
-                            .resize(self.particles.len(), Particle::default());
-                    }
-                    rim.encounter_map.push(new_index);
-                    rim.n_encounter += 1;
-                    if self.n_active == usize::MAX {
-                        rim.n_encounter_active += 1;
-                    }
-                }
-            },
+            Integrator::Mercurius(rim) => {
+                rim.update_encounters(self.g, self.dt, self.n_active, &self.particles)
+            }
             Integrator::Trace(trace) => {
-                if matches!(trace.mode, TraceMode::Kepler | TraceMode::Full) {
-                    // GBS part
-                    let new_n = self.particles.len();
-                    let old_n = new_n - 1;
-
-                    trace.particles_backup.resize(new_n, Particle::default());
-                    trace
-                        .particles_backup_kepler
-                        .resize(new_n, Particle::default());
-                    trace
-                        .particles_backup_additional_forces
-                        .resize(new_n, Particle::default());
-                    trace.resize_current_ks(old_n, new_n);
-                    for &p in trace.encounter_map.iter().skip(1) {
-                        trace.current_ks[p * new_n + old_n] = 1;
-                    }
-
-                    trace.encounter_map.push(old_n);
-                    trace.n_encounter += 1;
-                    if self.n_active == usize::MAX {
-                        trace.n_encounter_active += 1;
-                    }
-                }
+                trace.update_encounters(self.n_active, &self.particles);
             }
             _ => {}
         }

@@ -1,3 +1,14 @@
+#[cfg(feature = "quadrupole")]
+use crate::tree::Quadrupole;
+
+#[cfg(feature = "quadrupole")]
+pub type TreeParam = Quadrupole;
+
+#[cfg(not(feature = "quadrupole"))]
+pub type TreeParam = ();
+
+pub type TreeType = Tree<TreeParam>;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct NodeId(pub usize);
 
