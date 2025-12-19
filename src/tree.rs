@@ -1,7 +1,4 @@
 #[cfg(feature = "quadrupole")]
-use crate::tree::Quadrupole;
-
-#[cfg(feature = "quadrupole")]
 pub type TreeParam = Quadrupole;
 
 #[cfg(not(feature = "quadrupole"))]
