@@ -455,7 +455,7 @@ impl Simulation {
 
         let mut ctx = GravityContext {
             particles: &mut self.particles,
-            n: self.n_real,
+            n_real: self.n_real,
             n_active: self.n_active,
             n_root: self.n_root,
             g: self.g,
