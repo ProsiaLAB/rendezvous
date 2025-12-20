@@ -1,4 +1,4 @@
-use crate::integrator::{ForceSplitIntegrator, Synchronizable};
+use crate::integrator::{ForceSplit, Reset, Synchronize};
 use crate::integrator::{StepContext, SyncContext};
 use crate::particle::Particle;
 
@@ -13,7 +13,6 @@ pub struct Mercurius {
 
     pub is_synchronized: bool,
     pub mode: MercuriusMode,
-    pub n_encounter: usize,
     pub n_encounter_active: usize,
     pub tp_only_encounter: bool,
     pub dcrit: Vec<f64>,
@@ -95,7 +94,7 @@ impl Mercurius {
         }
     }
 
-    pub fn update_encounters(&mut self, g: f64, dt: f64, n_active: usize, particles: &[Particle]) {
+    pub fn add(&mut self, g: f64, dt: f64, n_active: usize, particles: &[Particle]) {
         match self.mode {
             MercuriusMode::LongRange => {
                 // WHFast mode
@@ -119,12 +118,28 @@ impl Mercurius {
                         .resize(particles.len(), Particle::default());
                 }
                 self.encounter_map.push(new_index);
-                self.n_encounter += 1;
                 if n_active == usize::MAX {
                     self.n_encounter_active += 1;
                 }
             }
         }
+    }
+
+    pub fn remove(&mut self, index: usize) -> bool {
+        if !self.dcrit.is_empty() && index < self.dcrit.len() {
+            self.dcrit.remove(index);
+        }
+        self.ias15.reset();
+        if matches!(self.mode, MercuriusMode::CloseEncounter)
+            && let Some(pos) = self.encounter_map.iter().position(|&x| x == index)
+        {
+            self.encounter_map.remove(pos);
+            if pos < self.n_encounter_active {
+                self.n_encounter_active -= 1;
+            }
+        }
+
+        true
     }
 
     pub fn set_dcrit(&mut self, p0: &Particle, pi: &Particle, g: f64, dt: f64, index: usize) {
@@ -154,13 +169,13 @@ impl Mercurius {
     }
 }
 
-impl Synchronizable for Mercurius {
+impl Synchronize for Mercurius {
     fn synchronize(&mut self, _ctx: SyncContext<'_>) {
         todo!()
     }
 }
 
-impl ForceSplitIntegrator for Mercurius {
+impl ForceSplit for Mercurius {
     fn pre_force(&mut self, _ctx: &mut StepContext<'_>) {
         todo!()
     }

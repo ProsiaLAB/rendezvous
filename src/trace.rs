@@ -1,6 +1,10 @@
-use crate::integrator::ForceSplitIntegrator;
+use crate::gbs::Gbs;
+use crate::ias15::Ias15;
+use crate::integrator::ForceSplit;
+use crate::integrator::Reset;
 use crate::integrator::StepContext;
 use crate::particle::Particle;
+use crate::whfast::WHFast;
 
 pub struct Trace {
     pub pericentric_mode: PericentricMode,
@@ -8,7 +12,6 @@ pub struct Trace {
     pub peri_crit_eta: f64,
 
     pub mode: TraceMode,
-    pub n_encounter: usize,
     pub n_encounter_active: usize,
     pub tp_only_encounter: bool,
     pub particles_backup: Vec<Particle>,
@@ -16,6 +19,10 @@ pub struct Trace {
     pub particles_backup_additional_forces: Vec<Particle>,
     pub encounter_map: Vec<usize>,
     pub current_ks: Vec<usize>,
+
+    pub gbs: Gbs,
+    pub ias15: Ias15,
+    pub whfast: WHFast,
 }
 
 impl Trace {
@@ -40,7 +47,7 @@ impl Trace {
         self.current_ks = new_ks;
     }
 
-    pub fn update_encounters(&mut self, n_active: usize, particles: &[Particle]) {
+    pub fn add(&mut self, n_active: usize, particles: &[Particle]) {
         if matches!(self.mode, TraceMode::Kepler | TraceMode::Full) {
             // GBS part
             let new_n = particles.len();
@@ -57,15 +64,41 @@ impl Trace {
             }
 
             self.encounter_map.push(old_n);
-            self.n_encounter += 1;
             if n_active == usize::MAX {
                 self.n_encounter_active += 1;
             }
         }
     }
+
+    pub fn remove(&mut self, n: usize, index: usize) -> bool {
+        self.gbs.reset();
+        if matches!(self.mode, TraceMode::Kepler | TraceMode::Full) {
+            if let Some(pos) = self.encounter_map.iter().position(|&x| x == index) {
+                self.encounter_map.remove(pos);
+                if pos < self.n_encounter_active {
+                    self.n_encounter_active -= 1;
+                }
+            }
+
+            let new_n = n - 1;
+            let old_n = n;
+
+            for i in 0..new_n {
+                let src_i = if i < index { i } else { i + 1 };
+                for j in 0..new_n {
+                    let src_j = if j < index { j } else { j + 1 };
+                    self.current_ks[i * new_n + j] = self.current_ks[src_i * old_n + src_j];
+                }
+            }
+
+            self.current_ks.truncate(new_n * new_n);
+        }
+
+        true
+    }
 }
 
-impl ForceSplitIntegrator for Trace {
+impl ForceSplit for Trace {
     fn pre_force(&mut self, _ctx: &mut StepContext<'_>) {
         todo!()
     }
