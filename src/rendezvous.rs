@@ -1,11 +1,12 @@
 use std::ops::ControlFlow;
 
 use prosia_extensions::types::Vec3;
+use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
 
 use crate::boundary::Boundary;
 use crate::collision::{Collision, CollisionResolver};
 use crate::gravity::{Gravity, GravityContext, IgnoreGravityTerms};
-use crate::integrator::{ForceSplitIntegrator, Synchronizable};
+use crate::integrator::{ForceSplit, Synchronize};
 use crate::integrator::{Integrator, StepContext, SyncContext};
 use crate::ode::OdeState;
 use crate::particle::{Particle, TestParticleType};
@@ -51,6 +52,8 @@ pub struct Simulation {
     pub collision: Collision,
     pub collision_resolve: Option<CollisionResolver>,
     pub boundary: Boundary,
+    pub track_energy_offset: bool,
+    pub energy_offset: f64,
 
     pub n_active: usize,
     pub exit_max_distance: Option<f64>,
@@ -118,6 +121,8 @@ impl Simulation {
             collision: Collision::None,
             collision_resolve: None,
             boundary: Boundary::None,
+            track_energy_offset: false,
+            energy_offset: 0.0,
 
             n_active: usize::MAX,
             test_particle_type: TestParticleType::Massless,
@@ -194,12 +199,8 @@ impl Simulation {
         self.particles.push(p);
 
         match &mut self.integrator {
-            Integrator::Mercurius(rim) => {
-                rim.update_encounters(self.g, self.dt, self.n_active, &self.particles)
-            }
-            Integrator::Trace(trace) => {
-                trace.update_encounters(self.n_active, &self.particles);
-            }
+            Integrator::Mercurius(m) => m.add(self.g, self.dt, self.n_active, &self.particles),
+            Integrator::Trace(t) => t.add(self.n_active, &self.particles),
             _ => {}
         }
     }
@@ -360,7 +361,187 @@ impl Simulation {
     }
 
     pub fn check_boundary(&mut self) {
-        todo!()
+        match self.boundary {
+            Boundary::Open => {
+                let mut i = 0;
+
+                while i < self.particles.len() {
+                    if self.should_remove(i) {
+                        if self.track_energy_offset {
+                            let ei = self.energy();
+                            self.remove(i, true);
+                            self.energy_offset += ei - self.energy();
+                        } else {
+                            self.remove(i, false);
+                        }
+
+                        if self.tree.is_none() {
+                            continue;
+                        } else {
+                            self.tree_needs_update = true;
+                        }
+                    }
+                    i += 1;
+                }
+            }
+            Boundary::Shear => {
+                let omega = match &self.integrator {
+                    Integrator::Sei(i) => i.omega,
+                    _ => {
+                        panic!("Shear boundary condition requires Sei integrator");
+                    }
+                };
+                let a = 1.5 * omega * self.box_size.x * self.t;
+                let b = self.box_size.y;
+
+                let offset_p1 = -(-a + b / 2.0 % b) - b / 2.0;
+                let offset_m1 = -(a - b / 2.0 % b) + b / 2.0;
+
+                self.particles.par_iter_mut().for_each(|p| {
+                    while p.x > self.box_size.x / 2.0 {
+                        p.x -= self.box_size.x;
+                        p.y += offset_p1;
+                        p.vy += 1.5 * omega * self.box_size.x;
+                    }
+
+                    while p.x < -self.box_size.x / 2.0 {
+                        p.x += self.box_size.x;
+                        p.y += offset_m1;
+                        p.vy -= 1.5 * omega * self.box_size.x;
+                    }
+
+                    while p.y > self.box_size.y / 2.0 {
+                        p.y -= self.box_size.y;
+                    }
+
+                    while p.y < -self.box_size.y / 2.0 {
+                        p.y += self.box_size.y;
+                    }
+
+                    while p.z > self.box_size.z / 2.0 {
+                        p.z -= self.box_size.z;
+                    }
+
+                    while p.z < -self.box_size.z / 2.0 {
+                        p.z += self.box_size.z;
+                    }
+                });
+            }
+            Boundary::Periodic => {
+                self.particles.par_iter_mut().for_each(|p| {
+                    while p.x > self.box_size.x / 2.0 {
+                        p.x -= self.box_size.x;
+                    }
+
+                    while p.x < -self.box_size.x / 2.0 {
+                        p.x += self.box_size.x;
+                    }
+
+                    while p.y > self.box_size.y / 2.0 {
+                        p.y -= self.box_size.y;
+                    }
+
+                    while p.y < -self.box_size.y / 2.0 {
+                        p.y += self.box_size.y;
+                    }
+
+                    while p.z > self.box_size.z / 2.0 {
+                        p.z -= self.box_size.z;
+                    }
+
+                    while p.z < -self.box_size.z / 2.0 {
+                        p.z += self.box_size.z;
+                    }
+                });
+            }
+            _ => {}
+        }
+    }
+
+    fn energy(&self) -> f64 {
+        let n_active = if self.n_active == usize::MAX {
+            self.n_real
+        } else {
+            self.n_active
+        };
+
+        let n_interacting = if matches!(self.test_particle_type, TestParticleType::Massless) {
+            self.n_active
+        } else {
+            self.n_real
+        };
+
+        let mut e_kin = 0.0;
+        let mut e_pot = 0.0;
+
+        for i in 0..n_interacting {
+            let p = &self.particles[i];
+            e_kin += 0.5 * p.m * (p.vx * p.vx + p.vy * p.vy + p.vz * p.vz);
+        }
+
+        for i in 0..n_active {
+            let p = &self.particles[i];
+            for j in i + 1..n_interacting {
+                let q = &self.particles[j];
+                let dx = p.x - q.x;
+                let dy = p.y - q.y;
+                let dz = p.z - q.z;
+                let r = (dx * dx + dy * dy + dz * dz).sqrt();
+                e_pot -= self.g * p.m * q.m / r;
+            }
+        }
+
+        e_kin + e_pot + self.energy_offset
+    }
+
+    fn should_remove(&self, pi: usize) -> bool {
+        let p = &self.particles[pi];
+        p.x > self.box_size.x / 2.0
+            || p.x < -self.box_size.x / 2.0
+            || p.y > self.box_size.y / 2.0
+            || p.y < -self.box_size.y / 2.0
+            || p.z > self.box_size.z / 2.0
+            || p.z < -self.box_size.z / 2.0
+    }
+
+    fn remove(&mut self, pi: usize, mut keep_sorted: bool) {
+        let n = self.particles.len();
+
+        match &mut self.integrator {
+            Integrator::Mercurius(m) => keep_sorted = m.remove(pi),
+            Integrator::Trace(t) => keep_sorted = t.remove(pi, n),
+            _ => {}
+        };
+
+        if n == 1 {
+            self.particles.clear();
+            eprintln!("WARNING: Removing the last particle from the simulation.");
+        }
+
+        if self.n_var.is_some() {
+            eprintln!(
+                "WARNING: Removing particles not supported when calculating MEGNO. \
+                 The particle was not removed."
+            );
+        }
+
+        if keep_sorted {
+            self.particles.remove(pi);
+            if pi < self.n_active {
+                self.n_active -= 1;
+            }
+
+            if self.tree.is_some() {
+                eprintln!(
+                    "WARNING: Removing particles while using tree is not possible at the moment. \
+                     The particle was not removed."
+                );
+            }
+        } else if self.tree.is_some() {
+            self.particles[pi].removed = true;
+        } else {
+            self.particles.swap_remove(pi);
+        }
     }
 
     pub fn update_tree(&mut self) {
