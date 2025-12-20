@@ -26,7 +26,7 @@ pub enum Integrator {
     None,
 }
 
-impl ForceSplitIntegrator for Integrator {
+impl ForceSplit for Integrator {
     fn pre_force(&mut self, ctx: &mut StepContext<'_>) {
         match self {
             Integrator::WHFast(i) => i.pre_force(ctx),
@@ -72,11 +72,11 @@ pub struct StepContext<'a> {
     pub ignore_gravity_terms: &'a mut IgnoreGravityTerms,
 }
 
-pub trait Synchronizable {
+pub trait Synchronize {
     fn synchronize(&mut self, ctx: SyncContext<'_>);
 }
 
-pub trait ForceSplitIntegrator {
+pub trait ForceSplit {
     fn pre_force(&mut self, ctx: &mut StepContext<'_>);
     fn post_force(&mut self, ctx: &mut StepContext<'_>);
 }
