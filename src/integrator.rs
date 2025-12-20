@@ -80,3 +80,7 @@ pub trait ForceSplitIntegrator {
     fn pre_force(&mut self, ctx: &mut StepContext<'_>);
     fn post_force(&mut self, ctx: &mut StepContext<'_>);
 }
+
+pub trait Reset {
+    fn reset(&mut self);
+}
