@@ -1,4 +1,5 @@
-use crate::integrator::ForceSplitIntegrator;
+use crate::integrator::ForceSplit;
+use crate::integrator::Reset;
 use crate::integrator::StepContext;
 
 pub struct Ias15 {
@@ -9,14 +10,14 @@ pub struct Ias15 {
     pub n_allocated: usize,
 }
 
-impl Ias15 {
-    pub fn reset(&mut self) {
+impl Reset for Ias15 {
+    fn reset(&mut self) {
         // Reset internal state
         todo!()
     }
 }
 
-impl ForceSplitIntegrator for Ias15 {
+impl ForceSplit for Ias15 {
     fn pre_force(&mut self, _ctx: &mut StepContext<'_>) {
         todo!()
     }

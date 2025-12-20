@@ -3,7 +3,8 @@
 //! the modified midpoint method to obtain solutions to ordinary
 //! differential equations.
 
-use crate::integrator::ForceSplitIntegrator;
+use crate::integrator::ForceSplit;
+use crate::integrator::Reset;
 use crate::integrator::StepContext;
 
 pub struct Gbs {
@@ -26,7 +27,14 @@ pub struct Gbs {
     pub user_ode_needs_nbody: bool,
 }
 
-impl ForceSplitIntegrator for Gbs {
+impl Reset for Gbs {
+    fn reset(&mut self) {
+        // Reset internal state
+        todo!()
+    }
+}
+
+impl ForceSplit for Gbs {
     fn pre_force(&mut self, _ctx: &mut StepContext<'_>) {
         todo!()
     }

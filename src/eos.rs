@@ -1,15 +1,15 @@
-use crate::integrator::{ForceSplitIntegrator, Synchronizable};
+use crate::integrator::{ForceSplit, Synchronize};
 use crate::integrator::{StepContext, SyncContext};
 
 pub struct Eos;
 
-impl Synchronizable for Eos {
+impl Synchronize for Eos {
     fn synchronize(&mut self, _ctx: SyncContext<'_>) {
         todo!()
     }
 }
 
-impl ForceSplitIntegrator for Eos {
+impl ForceSplit for Eos {
     fn pre_force(&mut self, _ctx: &mut StepContext<'_>) {
         todo!()
     }

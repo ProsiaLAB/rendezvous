@@ -1,4 +1,4 @@
-use crate::integrator::ForceSplitIntegrator;
+use crate::integrator::ForceSplit;
 use crate::integrator::StepContext;
 
 pub struct Sei {
@@ -6,7 +6,7 @@ pub struct Sei {
     pub omega_z: f64,
 }
 
-impl ForceSplitIntegrator for Sei {
+impl ForceSplit for Sei {
     fn pre_force(&mut self, _ctx: &mut StepContext<'_>) {
         todo!()
     }

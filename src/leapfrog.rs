@@ -5,12 +5,12 @@
 use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
 
 use crate::gravity::IgnoreGravityTerms;
-use crate::integrator::ForceSplitIntegrator;
+use crate::integrator::ForceSplit;
 use crate::integrator::StepContext;
 
 pub struct LeapFrog;
 
-impl ForceSplitIntegrator for LeapFrog {
+impl ForceSplit for LeapFrog {
     fn pre_force(&mut self, ctx: &mut StepContext<'_>) {
         *ctx.ignore_gravity_terms = IgnoreGravityTerms::IgnoreAll;
         ctx.particles.par_iter_mut().for_each(|p| {
