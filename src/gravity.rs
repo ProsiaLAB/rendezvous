@@ -582,7 +582,7 @@ impl GravityContext<'_> {
         self.particles[0].az = 0.0;
 
         // In heliocentric coordinates, the star feels no acceleration
-        let accels: Vec<(f64, f64, f64)> = (1..m.n_encounter)
+        let accels: Vec<(f64, f64, f64)> = (1..m.encounter_map.len())
             .into_par_iter()
             .map(|i| {
                 let mi = m.encounter_map[i];
@@ -644,7 +644,7 @@ impl GravityContext<'_> {
                     let y = self.particles[mi].y;
                     let z = self.particles[mi].z;
 
-                    for j in m.n_encounter_active..m.n_encounter {
+                    for j in m.n_encounter_active..m.encounter_map.len() {
                         let mj = m.encounter_map[j];
 
                         let dx = x - self.particles[mj].x;
@@ -773,7 +773,7 @@ impl GravityContext<'_> {
         self.particles[0].ay = 0.0;
         self.particles[0].az = 0.0;
 
-        let accels: Vec<(f64, f64, f64)> = (1..t.n_encounter)
+        let accels: Vec<(f64, f64, f64)> = (1..t.encounter_map.len())
             .into_par_iter()
             .map(|i| {
                 let mi = t.encounter_map[i];
@@ -835,7 +835,7 @@ impl GravityContext<'_> {
                     let y = self.particles[mi].y;
                     let z = self.particles[mi].z;
 
-                    for j in t.n_encounter_active..t.n_encounter {
+                    for j in t.n_encounter_active..t.encounter_map.len() {
                         let mj = t.encounter_map[j];
 
                         let dx = x - self.particles[mj].x;
