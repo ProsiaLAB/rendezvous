@@ -17,6 +17,7 @@ pub struct Particle {
 
     pub last_collision_time: f64,
     pub hash: u64,
+    pub removed: bool,
 }
 
 /// Type of test particles in the simulation.
