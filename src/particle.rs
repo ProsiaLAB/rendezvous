@@ -1,3 +1,5 @@
+use crate::tree::NodeId;
+
 #[derive(Default, Clone)]
 pub struct Particle {
     pub x: f64,
@@ -16,6 +18,7 @@ pub struct Particle {
     pub r: f64,
 
     pub last_collision_time: f64,
+    pub c: Option<NodeId>,
     pub hash: u64,
     pub removed: bool,
 }

@@ -10,7 +10,7 @@ use crate::integrator::{ForceSplit, Synchronize};
 use crate::integrator::{Integrator, StepContext, SyncContext};
 use crate::ode::OdeState;
 use crate::particle::{Particle, TestParticleType};
-use crate::tree::TreeType;
+use crate::tree::{NodeId, NodeKind, Tree, TreeType};
 
 type StepDecision = ControlFlow<ExitStatus, ()>;
 
@@ -41,7 +41,6 @@ pub struct Simulation {
     pub root_y: usize,
     pub root_z: usize,
     pub box_size: Vec3,
-    pub n_root: usize,
     pub box_size_max: f64,
 
     pub n_ghost_x: usize,
@@ -100,7 +99,6 @@ impl Simulation {
             root_y: 1,
             root_z: 1,
             box_size: Vec3::new(-1.0, -1.0, -1.0),
-            n_root: 1,
             box_size_max: -1.0,
 
             n_ghost_x: 0,
@@ -153,7 +151,6 @@ impl Simulation {
             root_size * z as f64,
         );
 
-        self.n_root = x * y * z;
         self.box_size_max = self.box_size.x.max(self.box_size.y).max(self.box_size.z);
         if self.root_x == 0 || self.root_y == 0 || self.root_z == 0 {
             panic!("Number of root cells in each dimension must be positive");
@@ -231,6 +228,26 @@ impl Simulation {
             }
             Boundary::None => true,
         }
+    }
+
+    pub fn is_particle_in_node(&self, node_id: NodeId) -> bool {
+        let node = self.tree.as_ref().unwrap().get_node(node_id);
+        let pt = match node.kind {
+            NodeKind::Leaf { particle: pt } => pt,
+            _ => {
+                panic!("is_particle_in_node called on non-leaf node");
+            }
+        };
+
+        if (self.particles[pt].x - node.x).abs() > node.w / 2.0
+            || (self.particles[pt].y - node.y).abs() > node.w / 2.0
+            || (self.particles[pt].z - node.z).abs() > node.w / 2.0
+            || self.particles[pt].removed
+        {
+            return false;
+        }
+
+        true
     }
 
     pub fn pre_time_step(&mut self, _dt: f64) {
@@ -545,7 +562,26 @@ impl Simulation {
     }
 
     pub fn update_tree(&mut self) {
-        todo!()
+        let tree = self
+            .tree
+            .get_or_insert_with(|| Tree::new(self.root_x * self.root_y * self.root_z));
+
+        for i in 0..tree.size() {
+            self.update_tree_node(Some(NodeId(i)));
+        }
+    }
+
+    fn update_tree_node(&mut self, node_id: Option<NodeId>) {
+        let node_kind = {
+            let tree = self.tree.as_ref().unwrap();
+            let node = tree.get_node(node_id.unwrap());
+            &node.kind
+        };
+
+        match node_kind {
+            NodeKind::Internal { .. } => {}
+            NodeKind::Leaf { particle } => {}
+        }
     }
 
     pub fn update_tree_gravity_data(&mut self) {
@@ -575,7 +611,6 @@ impl Simulation {
             particles: &mut self.particles,
             n_real: self.n_real,
             n_active: self.n_active,
-            n_root: self.n_root,
             g: self.g,
             t: self.t,
             integrator: &self.integrator,

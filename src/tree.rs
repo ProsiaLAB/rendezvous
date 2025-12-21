@@ -25,8 +25,12 @@ pub struct Node<M = ()> {
 }
 
 pub enum NodeKind {
-    Leaf(usize),
-    NonLeaf,
+    Leaf {
+        particle: usize,
+    },
+    Internal {
+        count: usize, // total particles in subtree
+    },
 }
 
 pub struct Tree<M> {
@@ -34,12 +38,26 @@ pub struct Tree<M> {
 }
 
 impl<M> Tree<M> {
+    pub fn alloc() -> Self {
+        Self { nodes: Vec::new() }
+    }
+
+    pub fn new(size: usize) -> Self {
+        Self {
+            nodes: Vec::with_capacity(size),
+        }
+    }
+
     pub fn get_node(&self, id: NodeId) -> &Node<M> {
         &self.nodes[id.0]
     }
 
     pub fn get_node_mut(&mut self, id: NodeId) -> &mut Node<M> {
         &mut self.nodes[id.0]
+    }
+
+    pub fn size(&self) -> usize {
+        self.nodes.len()
     }
 }
 

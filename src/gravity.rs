@@ -59,7 +59,6 @@ pub struct GravityContext<'a> {
     pub particles: &'a mut [Particle],
     pub n_real: usize,
     pub n_active: usize,
-    pub n_root: usize,
     pub g: f64,
     pub t: f64,
     pub integrator: &'a Integrator,
@@ -246,7 +245,7 @@ impl GravityContext<'_> {
         gb: &GhostBox,
         accum: &mut (f64, f64, f64),
     ) {
-        for i in 0..self.n_root {
+        for i in 0..self.tree.unwrap().size() {
             self.calculate_acceleration_from_node(NodeId(i), pi, gb, accum);
         }
     }
@@ -268,7 +267,7 @@ impl GravityContext<'_> {
         let r2 = dx * dx + dy * dy + dz * dz;
 
         match node.kind {
-            NodeKind::NonLeaf => {
+            NodeKind::Internal { .. } => {
                 if node.w * node.w > self.opening_angle * r2 {
                     node.children.iter().for_each(|child_opt| {
                         if let Some(child_id) = child_opt {
@@ -311,7 +310,7 @@ impl GravityContext<'_> {
                     }
                 }
             }
-            NodeKind::Leaf(pt) => {
+            NodeKind::Leaf { particle: pt } => {
                 if !node.remote && pt == pi {
                     // Skip self-interaction
                 } else {
