@@ -34,7 +34,7 @@ pub enum NodeKind {
 }
 
 pub struct Tree<M> {
-    nodes: Vec<Node<M>>,
+    nodes: Vec<Option<Node<M>>>,
 }
 
 impl<M> Tree<M> {
@@ -48,16 +48,25 @@ impl<M> Tree<M> {
         }
     }
 
-    pub fn get_node(&self, id: NodeId) -> &Node<M> {
-        &self.nodes[id.0]
+    pub fn get_node(&self, id: NodeId) -> Option<&Node<M>> {
+        self.nodes[id.0].as_ref()
     }
 
-    pub fn get_node_mut(&mut self, id: NodeId) -> &mut Node<M> {
-        &mut self.nodes[id.0]
+    pub fn get_node_mut(&mut self, id: NodeId) -> Option<&mut Node<M>> {
+        self.nodes[id.0].as_mut()
+    }
+
+    pub fn remove_node(&mut self, id: NodeId) {
+        assert!(self.nodes[id.0].is_some());
+        self.nodes[id.0] = None;
     }
 
     pub fn size(&self) -> usize {
         self.nodes.len()
+    }
+
+    pub fn get_node_kind(&self, id: NodeId) -> &NodeKind {
+        &self.get_node(id).unwrap().kind
     }
 }
 
