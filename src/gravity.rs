@@ -257,7 +257,7 @@ impl GravityContext<'_> {
         gb: &GhostBox,
         accum: &mut (f64, f64, f64),
     ) {
-        let node = self.tree.unwrap().get_node(node_id);
+        let node = self.tree.unwrap().get_node(node_id).unwrap();
 
         let soft2 = self.softening * self.softening;
         let dx = gb.position.x - node.mx;
