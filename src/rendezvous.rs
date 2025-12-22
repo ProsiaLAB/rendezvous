@@ -562,12 +562,9 @@ impl Simulation {
     }
 
     pub fn update_tree(&mut self) {
-        let mut tree = self
-            .tree
-            .take()
-            .unwrap_or_else(|| Tree::new(self.root_x * self.root_y * self.root_z));
+        let size = self.root_x * self.root_y * self.root_z;
+        let mut tree = self.tree.take().unwrap_or_else(|| Tree::new(size));
 
-        let size = tree.size();
         for i in 0..size {
             self.update_tree_node(&mut tree, NodeId(i));
         }
@@ -575,7 +572,7 @@ impl Simulation {
         self.tree = Some(tree);
     }
 
-    fn update_tree_node(&mut self, tree: &mut TreeType, node_id: NodeId) {
+    fn update_tree_node(&mut self, tree: &mut TreeKind, node_id: NodeId) {
         let mut test = usize::MAX;
 
         let node_kind = tree.get_node_kind(node_id);
