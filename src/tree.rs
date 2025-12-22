@@ -4,7 +4,7 @@ pub type TreeParam = Quadrupole;
 #[cfg(not(feature = "quadrupole"))]
 pub type TreeParam = ();
 
-pub type TreeType = Tree<TreeParam>;
+pub type TreeKind = Tree<TreeParam>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct NodeId(pub usize);

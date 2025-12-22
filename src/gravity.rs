@@ -9,7 +9,7 @@ use crate::integrator::Integrator;
 use crate::mercurius::{Mercurius, MercuriusMode};
 use crate::particle::{Particle, TestParticleType};
 use crate::trace::{Trace, TraceMode};
-use crate::tree::{NodeId, NodeKind, TreeType};
+use crate::tree::{NodeId, NodeKind, TreeKind};
 
 pub enum Gravity {
     None,
@@ -71,7 +71,7 @@ pub struct GravityContext<'a> {
     pub softening: f64,
     pub test_particle_type: &'a TestParticleType,
     pub gravity_cs: &'a mut [Vec3],
-    pub tree: Option<&'a TreeType>,
+    pub tree: Option<&'a TreeKind>,
     pub opening_angle: f64,
 }
 

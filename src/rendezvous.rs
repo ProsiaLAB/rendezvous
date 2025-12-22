@@ -10,9 +10,10 @@ use crate::integrator::{ForceSplit, Synchronize};
 use crate::integrator::{Integrator, StepContext, SyncContext};
 use crate::ode::OdeState;
 use crate::particle::{Particle, TestParticleType};
-use crate::tree::{NodeId, NodeKind, Tree, TreeType};
+use crate::tree::{NodeId, NodeKind, Tree, TreeKind};
 
 type StepDecision = ControlFlow<ExitStatus, ()>;
+pub type SimulationHook = fn(&mut Simulation);
 
 pub struct Simulation {
     /// Current simulation time. Initialized to zero by default.
@@ -73,13 +74,12 @@ pub struct Simulation {
     pub integrator: Integrator,
     /// Executed at each timestep once.
     /// Use this to do extra output/work during a simulation.
-    pub heartbeat: Option<fn(&mut Self)>,
+    pub heartbeat: Option<SimulationHook>,
 
-    pub additional_forces: Option<fn(&mut Self)>,
-    pub pre_time_step_modifications: Option<fn(&mut Self)>,
-    pub post_time_step_modifications: Option<fn(&mut Self)>,
-
-    pub tree: Option<TreeType>,
+    pub additional_forces: Option<SimulationHook>,
+    pub pre_time_step_modifications: Option<SimulationHook>,
+    pub post_time_step_modifications: Option<SimulationHook>,
+    pub tree: Option<TreeKind>,
     pub tree_needs_update: bool,
     pub opening_angle: f64,
 }
