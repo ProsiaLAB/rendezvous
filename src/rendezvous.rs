@@ -231,7 +231,7 @@ impl Simulation {
     }
 
     pub fn is_particle_in_node(&self, node_id: NodeId) -> bool {
-        let node = self.tree.as_ref().unwrap().get_node(node_id);
+        let node = self.tree.as_ref().unwrap().get_node(node_id).unwrap();
         let pt = match node.kind {
             NodeKind::Leaf { particle: pt } => pt,
             _ => {
@@ -562,25 +562,107 @@ impl Simulation {
     }
 
     pub fn update_tree(&mut self) {
-        let tree = self
+        let mut tree = self
             .tree
-            .get_or_insert_with(|| Tree::new(self.root_x * self.root_y * self.root_z));
+            .take()
+            .unwrap_or_else(|| Tree::new(self.root_x * self.root_y * self.root_z));
 
-        for i in 0..tree.size() {
-            self.update_tree_node(Some(NodeId(i)));
+        let size = tree.size();
+        for i in 0..size {
+            self.update_tree_node(&mut tree, NodeId(i));
         }
+
+        self.tree = Some(tree);
     }
 
-    fn update_tree_node(&mut self, node_id: Option<NodeId>) {
-        let node_kind = {
-            let tree = self.tree.as_ref().unwrap();
-            let node = tree.get_node(node_id.unwrap());
-            &node.kind
-        };
+    fn update_tree_node(&mut self, tree: &mut TreeType, node_id: NodeId) {
+        let mut test = usize::MAX;
+
+        let node_kind = tree.get_node_kind(node_id);
 
         match node_kind {
-            NodeKind::Internal { .. } => {}
-            NodeKind::Leaf { particle } => {}
+            NodeKind::Internal { .. } => {
+                for i in 0..8 {
+                    let child_id = {
+                        let node = tree.get_node_mut(node_id).unwrap();
+                        match &mut node.children[i] {
+                            Some(child_id) => *child_id,
+                            None => continue,
+                        }
+                    };
+                    self.update_tree_node(tree, child_id);
+                }
+                let mut pt = 0;
+                for i in 0..8 {
+                    let node = tree.get_node(node_id).unwrap();
+                    let d = &node.children[i];
+                    if let Some(child_id) = d {
+                        let child = tree.get_node(*child_id).unwrap();
+                        if let NodeKind::Internal { count: c } = child.kind {
+                            pt += c;
+                        } else {
+                            pt = usize::MAX;
+                            test = i;
+                        }
+                    }
+                }
+                if pt == 0 {
+                    tree.remove_node(node_id);
+                } else if pt == usize::MAX {
+                    let child_id = {
+                        let node = tree.get_node_mut(node_id).unwrap();
+                        node.children[test]
+                            .take()
+                            .expect("derefine child must exist")
+                    };
+
+                    let particle = match tree.get_node(child_id).unwrap().kind {
+                        NodeKind::Leaf { particle } => particle,
+                        _ => unreachable!("exactly one leaf expected"),
+                    };
+
+                    {
+                        let node = tree.get_node_mut(node_id).unwrap();
+                        node.kind = NodeKind::Leaf { particle };
+                    }
+
+                    tree.remove_node(child_id);
+                }
+
+                let node = tree.get_node_mut(node_id).unwrap();
+                node.kind = NodeKind::Internal { count: pt };
+            }
+            NodeKind::Leaf { particle } => {
+                if !self.is_particle_in_node(node_id) {
+                    let oldpos = *particle;
+
+                    let reinsertme = self.particles[oldpos].clone();
+
+                    let last = self.particles.len() - 1;
+                    self.particles.swap(oldpos, last);
+
+                    let moved_particle_cell = if oldpos != last {
+                        self.particles[oldpos].c
+                    } else {
+                        None
+                    };
+
+                    self.particles.pop();
+
+                    if let Some(cell) = moved_particle_cell {
+                        let moved_node = tree.get_node_mut(cell).unwrap();
+                        moved_node.kind = NodeKind::Leaf { particle: oldpos };
+                    }
+
+                    if !reinsertme.removed {
+                        self.add(reinsertme);
+                    }
+
+                    tree.remove_node(node_id);
+                } else {
+                    self.particles[*particle].c = Some(node_id);
+                }
+            }
         }
     }
 
