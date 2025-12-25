@@ -1,7 +1,7 @@
 use thiserror::Error;
 
 use crate::gravity::{Gravity, IgnoreGravityTerms};
-use crate::particle::Particle;
+use crate::particle::{Particle, Particles, TestParticleKind};
 
 use crate::eos::Eos;
 use crate::gbs::Gbs;
@@ -16,17 +16,23 @@ use crate::trace::Trace;
 use crate::whfast::{WHFast, WHFastError};
 
 pub enum Integrator {
-    Ias15(Ias15),
-    WHFast(WHFast),
-    LeapFrog(LeapFrog),
-    Gbs(Gbs),
-    Sei(Sei),
-    Janus(Janus),
-    Mercurius(Mercurius),
-    Saba(Saba),
-    Eos(Eos),
-    Trace(Trace),
+    Ias15(Box<Ias15>),
+    WHFast(Box<WHFast>),
+    LeapFrog(Box<LeapFrog>),
+    Gbs(Box<Gbs>),
+    Sei(Box<Sei>),
+    Janus(Box<Janus>),
+    Mercurius(Box<Mercurius>),
+    Saba(Box<Saba>),
+    Eos(Box<Eos>),
+    Trace(Box<Trace>),
     None,
+}
+
+impl Default for Integrator {
+    fn default() -> Self {
+        Integrator::LeapFrog(Box::new(LeapFrog))
+    }
 }
 
 impl ForceSplit for Integrator {
@@ -65,13 +71,14 @@ impl ForceSplit for Integrator {
 
 pub struct SyncContext<'a> {
     pub var_cfg: Option<&'a Vec<VariationalConfig>>,
-    pub particles: &'a mut [Particle],
+    pub particles: &'a mut Particles,
     pub gravity: &'a mut Gravity,
     pub ignore_gravity_terms: &'a mut IgnoreGravityTerms,
+    pub test_particle_kind: &'a TestParticleKind,
 }
 
 pub struct StepContext<'a> {
-    pub particles: &'a mut [Particle],
+    pub particles: &'a mut Particles,
     pub t: &'a mut f64,
     pub dt: f64,
     pub dt_last_done: &'a mut f64,
