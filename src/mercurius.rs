@@ -1,28 +1,28 @@
 use crate::integrator::{ForceSplit, Reset, Synchronize};
 use crate::integrator::{StepContext, SyncContext};
-use crate::particle::Particle;
+use crate::particle::{Particle, Particles};
 
 use crate::ias15::Ias15;
 use crate::whfast::WHFast;
 
 pub struct Mercurius {
-    pub r_crit_hill: f64,
-    pub recalculate_coordinates_this_time_step: bool,
-    pub recalculate_r_crit_this_time_step: bool,
-    pub safe_mode: bool,
+    r_crit_hill: f64,
+    recalculate_coordinates_this_time_step: bool,
+    recalculate_r_crit_this_time_step: bool,
+    safe_mode: bool,
 
-    pub is_synchronized: bool,
-    pub mode: MercuriusMode,
-    pub n_encounter_active: usize,
-    pub tp_only_encounter: bool,
-    pub dcrit: Vec<f64>,
-    pub particles_backup: Vec<Particle>,
-    pub particles_backup_additional_forces: Vec<Particle>,
-    pub encounter_map: Vec<usize>,
-    pub switch_fn: SwitchFunction,
+    is_synchronized: bool,
+    pub(crate) mode: MercuriusMode,
+    pub(crate) n_encounter_active: usize,
+    tp_only_encounter: bool,
+    pub(crate) dcrit: Vec<f64>,
+    particles_backup: Particles,
+    particles_backup_additional_forces: Particles,
+    pub(crate) encounter_map: Vec<usize>,
+    switch_fn: SwitchFunction,
 
-    pub whfast: WHFast,
-    pub ias15: Ias15,
+    whfast: WHFast,
+    ias15: Ias15,
 }
 
 impl Mercurius {
@@ -94,7 +94,7 @@ impl Mercurius {
         }
     }
 
-    pub fn add(&mut self, g: f64, dt: f64, n_active: usize, particles: &[Particle]) {
+    pub fn add(&mut self, g: f64, dt: f64, particles: &Particles) {
         match self.mode {
             MercuriusMode::LongRange => {
                 // WHFast mode
@@ -112,13 +112,12 @@ impl Mercurius {
                 let pi = &particles[new_index];
                 self.set_dcrit(p0, pi, g, dt, new_index);
                 if self.particles_backup.len() < particles.len() {
-                    self.particles_backup
-                        .resize(particles.len(), Particle::default());
+                    self.particles_backup.resize(particles.len());
                     self.particles_backup_additional_forces
-                        .resize(particles.len(), Particle::default());
+                        .resize(particles.len());
                 }
                 self.encounter_map.push(new_index);
-                if n_active == usize::MAX {
+                if particles.are_all_active() {
                     self.n_encounter_active += 1;
                 }
             }
@@ -167,10 +166,14 @@ impl Mercurius {
         dcrit = dcrit.max(2.0 * pi.r);
         self.dcrit[index] = dcrit;
     }
+
+    pub fn recalculate_coordinates(&mut self) {
+        self.recalculate_coordinates_this_time_step = true;
+    }
 }
 
 impl Synchronize for Mercurius {
-    fn synchronize(&mut self, _ctx: SyncContext<'_>) {
+    fn synchronize(&mut self, _ctx: &mut SyncContext<'_>) {
         todo!()
     }
 }
