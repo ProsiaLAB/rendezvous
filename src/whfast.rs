@@ -1,7 +1,11 @@
 #![allow(clippy::excessive_precision)]
 
+use thiserror::Error;
+
+use crate::gravity::{Gravity, IgnoreGravityTerms};
 use crate::integrator::{ForceSplit, Synchronize};
 use crate::integrator::{StepContext, SyncContext};
+use crate::particle::{Particle, Particles};
 
 const CORRECTOR_A_1: f64 = 0.41833001326703777398908601289259374469640768464934;
 const CORRECTOR_A_2: f64 = 0.83666002653407554797817202578518748939281536929867;
@@ -71,12 +75,93 @@ const INVERSE_FACTORIALS: [f64; 35] = [
 ];
 
 pub struct WHFast {
-    pub recalculate_coordinates_this_time_step: bool,
+    recalculate_coordinates_this_time_step: bool,
+    coordinates: Coordinates,
+    kernel: Kernel,
+    corrector: Corrector,
+    use_secondary_corrector: bool,
+    keep_unsynchoronized: bool,
+    safe_mode: SafeMode,
+    particles: Particles,
+    is_synchronized: bool,
+}
+
+impl WHFast {
+    fn init(&mut self, ctx: &mut SyncContext<'_>) -> Result<(), WHFastError> {
+        if let Some(var_cfg) = ctx.var_cfg {
+            for v in var_cfg.iter() {
+                if v.order != 1 {
+                    return Err(WHFastError::UnsupportedVariationalOrder);
+                }
+                if v.is_test_particle {
+                    return Err(WHFastError::TestParticleVariationalNotSupported);
+                }
+            }
+        }
+
+        if ctx.var_cfg.is_some() && !matches!(self.coordinates, Coordinates::Jacobi) {
+            return Err(WHFastError::VariationalJacobiOnly);
+        }
+
+        if !matches!(self.kernel, Kernel::Default)
+            && !matches!(self.coordinates, Coordinates::Jacobi)
+        {
+            return Err(WHFastError::NonStandardKernelJacobiOnly);
+        }
+
+        if ctx.var_cfg.is_some() && !matches!(self.kernel, Kernel::Default) {
+            return Err(WHFastError::VariationalStandardKernelOnly);
+        }
+
+        if !matches!(self.corrector, Corrector::None)
+            && !matches!(
+                self.coordinates,
+                Coordinates::Jacobi | Coordinates::Barycentric
+            )
+        {
+            return Err(WHFastError::SymplecticCorrectorJacobiOrBarycentricOnly);
+        }
+
+        if self.keep_unsynchoronized && matches!(self.safe_mode, SafeMode::Combine) {
+            return Err(WHFastError::InvalidSafeModeCombination);
+        }
+
+        if matches!(self.kernel, Kernel::ModifiedKick | Kernel::Lazy) {
+            *ctx.gravity = Gravity::Jacobi;
+        } else {
+            match self.coordinates {
+                Coordinates::Jacobi => {
+                    *ctx.ignore_gravity_terms = IgnoreGravityTerms::IgnoreWHFastwithJacobi;
+                }
+                Coordinates::Barycentric => {
+                    *ctx.ignore_gravity_terms = IgnoreGravityTerms::IgnoreAll
+                }
+                _ => {
+                    *ctx.ignore_gravity_terms = IgnoreGravityTerms::IgnoreWHFastwithDHC;
+                }
+            }
+        }
+
+        self.particles
+            .resize(ctx.particles.len(), Particle::default());
+
+        self.recalculate_coordinates();
+
+        Ok(())
+    }
+
+    pub fn recalculate_coordinates(&mut self) {
+        self.recalculate_coordinates_this_time_step = true;
+    }
 }
 
 impl Synchronize for WHFast {
-    fn synchronize(&mut self, _ctx: SyncContext<'_>) {
-        todo!()
+    fn synchronize(&mut self, ctx: &mut SyncContext<'_>) {
+        if self.init(ctx).is_err() {
+            return;
+        }
+
+        if !self.is_synchronized {}
     }
 }
 
@@ -88,4 +173,73 @@ impl ForceSplit for WHFast {
     fn post_force(&mut self, _ctx: &mut StepContext<'_>) {
         todo!()
     }
+}
+
+enum Coordinates {
+    /// Jacobi coordinates (default)
+    Jacobi,
+    /// Democratic Heliocentric coordinates
+    DemocraticHeliocentric,
+    /// WHDS coordinates (Hernandez and Dehnen 2017)
+    Whds,
+    /// Barycentric coordinates
+    Barycentric,
+}
+
+enum Kernel {
+    Default,
+    ModifiedKick,
+    Composition,
+    Lazy,
+}
+
+enum Corrector {
+    None,
+    Order3,
+    Order5,
+    Order7,
+    Order11,
+    Order17,
+}
+
+impl Corrector {
+    fn order(self) -> Option<u32> {
+        match self {
+            Corrector::None => None,
+            Corrector::Order3 => Some(3),
+            Corrector::Order5 => Some(5),
+            Corrector::Order7 => Some(7),
+            Corrector::Order11 => Some(11),
+            Corrector::Order17 => Some(17),
+        }
+    }
+}
+
+enum SafeMode {
+    DriftKickDrift,
+    Combine,
+}
+
+#[derive(Debug, Error)]
+pub enum WHFastError {
+    #[error("WHFast/MEGNO only supports first-order variational equations")]
+    UnsupportedVariationalOrder,
+
+    #[error("Test particle variational particles are not supported in WHFast")]
+    TestParticleVariationalNotSupported,
+
+    #[error("Variational particles require Jacobi coordinates in WHFast")]
+    VariationalJacobiOnly,
+
+    #[error("Non-standard kernels require Jacobi coordinates in WHFast")]
+    NonStandardKernelJacobiOnly,
+
+    #[error("Variational particles are only supported with the standard kernel in WHFast")]
+    VariationalStandardKernelOnly,
+
+    #[error("Symplectic correctors require Jacobi or Barycentric coordinates in WHFast")]
+    SymplecticCorrectorJacobiOrBarycentricOnly,
+
+    #[error("Cannot keep unsynchronized particles when using SafeMode::Combine in WHFast")]
+    InvalidSafeModeCombination,
 }

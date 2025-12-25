@@ -4,7 +4,7 @@ use crate::integrator::{StepContext, SyncContext};
 pub struct Saba;
 
 impl Synchronize for Saba {
-    fn synchronize(&mut self, _ctx: SyncContext<'_>) {
+    fn synchronize(&mut self, _ctx: &mut SyncContext<'_>) {
         todo!()
     }
 }

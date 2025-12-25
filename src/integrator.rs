@@ -1,4 +1,6 @@
-use crate::gravity::IgnoreGravityTerms;
+use thiserror::Error;
+
+use crate::gravity::{Gravity, IgnoreGravityTerms};
 use crate::particle::Particle;
 
 use crate::eos::Eos;
@@ -7,10 +9,11 @@ use crate::ias15::Ias15;
 use crate::janus::Janus;
 use crate::leapfrog::LeapFrog;
 use crate::mercurius::Mercurius;
+use crate::rendezvous::VariationalConfig;
 use crate::saba::Saba;
 use crate::sei::Sei;
 use crate::trace::Trace;
-use crate::whfast::WHFast;
+use crate::whfast::{WHFast, WHFastError};
 
 pub enum Integrator {
     Ias15(Ias15),
@@ -61,7 +64,10 @@ impl ForceSplit for Integrator {
 }
 
 pub struct SyncContext<'a> {
+    pub var_cfg: Option<&'a Vec<VariationalConfig>>,
     pub particles: &'a mut [Particle],
+    pub gravity: &'a mut Gravity,
+    pub ignore_gravity_terms: &'a mut IgnoreGravityTerms,
 }
 
 pub struct StepContext<'a> {
@@ -73,7 +79,7 @@ pub struct StepContext<'a> {
 }
 
 pub trait Synchronize {
-    fn synchronize(&mut self, ctx: SyncContext<'_>);
+    fn synchronize(&mut self, ctx: &mut SyncContext<'_>);
 }
 
 pub trait ForceSplit {
@@ -83,4 +89,10 @@ pub trait ForceSplit {
 
 pub trait Reset {
     fn reset(&mut self);
+}
+
+#[derive(Debug, Error)]
+pub enum IntegratorError {
+    #[error("WHFast error: {0}")]
+    WHFast(#[from] WHFastError),
 }

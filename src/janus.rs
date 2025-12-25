@@ -4,7 +4,7 @@ use crate::integrator::{StepContext, SyncContext};
 pub struct Janus;
 
 impl Synchronize for Janus {
-    fn synchronize(&mut self, _ctx: SyncContext<'_>) {
+    fn synchronize(&mut self, _ctx: &mut SyncContext<'_>) {
         todo!()
     }
 }
