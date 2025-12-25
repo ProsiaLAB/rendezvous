@@ -5,7 +5,7 @@ use thiserror::Error;
 use crate::gravity::{Gravity, IgnoreGravityTerms};
 use crate::integrator::{ForceSplit, Synchronize};
 use crate::integrator::{StepContext, SyncContext};
-use crate::particle::{Particle, Particles};
+use crate::particle::{Particles, TestParticleKind, Transformations};
 
 const CORRECTOR_A_1: f64 = 0.41833001326703777398908601289259374469640768464934;
 const CORRECTOR_A_2: f64 = 0.83666002653407554797817202578518748939281536929867;
@@ -82,8 +82,7 @@ pub struct WHFast {
     use_secondary_corrector: bool,
     keep_unsynchoronized: bool,
     safe_mode: SafeMode,
-    particles: Particles,
-    is_synchronized: bool,
+    particles: Option<Particles>,
 }
 
 impl WHFast {
@@ -142,9 +141,6 @@ impl WHFast {
             }
         }
 
-        self.particles
-            .resize(ctx.particles.len(), Particle::default());
-
         self.recalculate_coordinates();
 
         Ok(())
@@ -153,6 +149,14 @@ impl WHFast {
     pub fn recalculate_coordinates(&mut self) {
         self.recalculate_coordinates_this_time_step = true;
     }
+
+    pub fn kepler_step(&mut self) {}
+
+    pub fn com_step(&mut self) {}
+
+    pub fn apply_corrector(&mut self) {}
+
+    pub fn apply_secondary_corrector(&mut self) {}
 }
 
 impl Synchronize for WHFast {
@@ -161,7 +165,84 @@ impl Synchronize for WHFast {
             return;
         }
 
-        if !self.is_synchronized {}
+        let n_real = ctx.particles.n_real();
+        let n_active = if ctx.particles.are_all_active()
+            || matches!(ctx.test_particle_kind, TestParticleKind::Massive)
+        {
+            n_real
+        } else {
+            ctx.particles.n_active()
+        };
+
+        let mut p_jh = match self.particles.take() {
+            Some(p) => p,
+            None => return,
+        };
+
+        match self.kernel {
+            Kernel::Default | Kernel::ModifiedKick => {}
+            Kernel::Lazy => {
+                self.kepler_step();
+                self.com_step();
+            }
+            Kernel::Composition => {
+                self.kepler_step();
+                self.com_step();
+            }
+        }
+
+        if self.use_secondary_corrector {
+            self.apply_secondary_corrector();
+        }
+
+        if !matches!(self.corrector, Corrector::None) {
+            self.apply_corrector();
+        }
+
+        let masses = ctx
+            .particles
+            .as_slice()
+            .iter()
+            .map(|p| p.m)
+            .collect::<Vec<f64>>();
+
+        match self.coordinates {
+            Coordinates::Jacobi => {
+                ctx.particles
+                    .as_mut_slice()
+                    .transform_jacobi_to_inertial_posvel(
+                        p_jh.as_slice(),
+                        &masses,
+                        n_real,
+                        n_active,
+                    );
+            }
+            Coordinates::DemocraticHeliocentric => {
+                ctx.particles
+                    .as_mut_slice()
+                    .transform_dhc_to_inertial_posvel();
+            }
+            Coordinates::Whds => {
+                ctx.particles
+                    .as_mut_slice()
+                    .transform_whds_to_inertial_posvel();
+            }
+            Coordinates::Barycentric => {
+                ctx.particles
+                    .as_mut_slice()
+                    .transform_barycentric_to_inertial_posvel();
+            }
+        }
+
+        if let Some(vcs) = ctx.var_cfg {
+            // TODO
+        }
+
+        if self.keep_unsynchoronized {
+            self.particles = Some(p_jh);
+        } else {
+            self.particles = None;
+        }
     }
 }
 
