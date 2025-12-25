@@ -1,9 +1,8 @@
 use crate::gbs::Gbs;
 use crate::ias15::Ias15;
-use crate::integrator::ForceSplit;
-use crate::integrator::Reset;
 use crate::integrator::StepContext;
-use crate::particle::Particle;
+use crate::integrator::{ForceSplit, Reset};
+use crate::particle::Particles;
 use crate::whfast::WHFast;
 
 pub struct Trace {
@@ -14,9 +13,9 @@ pub struct Trace {
     pub mode: TraceMode,
     pub n_encounter_active: usize,
     pub tp_only_encounter: bool,
-    pub particles_backup: Vec<Particle>,
-    pub particles_backup_kepler: Vec<Particle>,
-    pub particles_backup_additional_forces: Vec<Particle>,
+    pub particles_backup: Particles,
+    pub particles_backup_kepler: Particles,
+    pub particles_backup_additional_forces: Particles,
     pub encounter_map: Vec<usize>,
     pub current_ks: Vec<usize>,
 
@@ -47,24 +46,22 @@ impl Trace {
         self.current_ks = new_ks;
     }
 
-    pub fn add(&mut self, n_active: usize, particles: &[Particle]) {
+    pub fn add(&mut self, particles: &Particles) {
         if matches!(self.mode, TraceMode::Kepler | TraceMode::Full) {
             // GBS part
             let new_n = particles.len();
             let old_n = new_n - 1;
 
-            self.particles_backup.resize(new_n, Particle::default());
-            self.particles_backup_kepler
-                .resize(new_n, Particle::default());
-            self.particles_backup_additional_forces
-                .resize(new_n, Particle::default());
+            self.particles_backup.resize(new_n);
+            self.particles_backup_kepler.resize(new_n);
+            self.particles_backup_additional_forces.resize(new_n);
             self.resize_current_ks(old_n, new_n);
             for &p in self.encounter_map.iter().skip(1) {
                 self.current_ks[p * new_n + old_n] = 1;
             }
 
             self.encounter_map.push(old_n);
-            if n_active == usize::MAX {
+            if particles.are_all_active() {
                 self.n_encounter_active += 1;
             }
         }

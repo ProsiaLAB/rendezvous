@@ -7,7 +7,7 @@ use rayon::iter::{
 use crate::boundary::{Boundary, BoundaryContext, GhostBox};
 use crate::integrator::Integrator;
 use crate::mercurius::{Mercurius, MercuriusMode};
-use crate::particle::{Particle, TestParticleType};
+use crate::particle::{Particles, TestParticleKind};
 use crate::trace::{Trace, TraceMode};
 use crate::tree::{NodeId, NodeKind, TreeKind};
 
@@ -56,9 +56,7 @@ impl IgnoreGravityTerms {
 }
 
 pub struct GravityContext<'a> {
-    pub particles: &'a mut [Particle],
-    pub n_real: usize,
-    pub n_active: usize,
+    pub particles: &'a mut Particles,
     pub g: f64,
     pub t: f64,
     pub integrator: &'a Integrator,
@@ -69,7 +67,7 @@ pub struct GravityContext<'a> {
     pub box_size: &'a Vec3,
     pub ignore_gravity_terms: &'a IgnoreGravityTerms,
     pub softening: f64,
-    pub test_particle_type: &'a TestParticleType,
+    pub test_particle_kind: &'a TestParticleKind,
     pub gravity_cs: &'a mut [Vec3],
     pub tree: Option<&'a TreeKind>,
     pub opening_angle: f64,
@@ -404,23 +402,32 @@ impl GravityContext<'_> {
         for (gbx, gby, gbz) in iproduct!(-ngx..=ngx, -ngy..=ngy, -ngz..=ngz) {
             let gb = self.boundary.get_ghost_box(&boundary_ctx, gbx, gby, gbz);
 
-            self.update_basic(0..self.n_real, 0..n_active, soft2, &gb, |i, j| {
-                self.ignore_gravity_terms.for_active_particles(i, j)
-            });
+            self.update_basic(
+                0..self.particles.n_real(),
+                0..n_active,
+                soft2,
+                &gb,
+                |i, j| self.ignore_gravity_terms.for_active_particles(i, j),
+            );
 
-            if matches!(self.test_particle_type, TestParticleType::Massive) {
-                self.update_basic(0..n_active, n_active..self.n_real, soft2, &gb, |i, j| {
-                    self.ignore_gravity_terms.for_massive_test_particles(i, j)
-                });
+            if matches!(self.test_particle_kind, TestParticleKind::Massive) {
+                self.update_basic(
+                    0..n_active,
+                    n_active..self.particles.n_real(),
+                    soft2,
+                    &gb,
+                    |i, j| self.ignore_gravity_terms.for_massive_test_particles(i, j),
+                );
             }
         }
     }
 
     fn apply_compensated(&mut self, n_active: usize, soft2: f64) {
+        let n_real = self.particles.n_real();
+
         self.particles
-            .par_iter_mut()
-            .take(self.n_real)
-            .zip(self.gravity_cs.par_iter_mut().take(self.n_real))
+            .real_par_iter_mut()
+            .zip(self.gravity_cs.par_iter_mut().take(n_real))
             .for_each(|(p, cs)| {
                 p.ax = 0.0;
                 p.ay = 0.0;
@@ -435,14 +442,20 @@ impl GravityContext<'_> {
             self.ignore_gravity_terms.for_active_particles(i, j)
         });
 
-        self.update_compensated_ij(n_active..self.n_real, 0..n_active, soft2, |i, j| {
-            self.ignore_gravity_terms.for_massive_test_particles(i, j)
-        });
+        self.update_compensated_ij(
+            n_active..self.particles.n_real(),
+            0..n_active,
+            soft2,
+            |i, j| self.ignore_gravity_terms.for_massive_test_particles(i, j),
+        );
 
-        if matches!(self.test_particle_type, TestParticleType::Massive) {
-            self.update_compensated_ji(0..n_active, n_active..self.n_real, soft2, |i, j| {
-                self.ignore_gravity_terms.for_massive_test_particles(i, j)
-            });
+        if matches!(self.test_particle_kind, TestParticleKind::Massive) {
+            self.update_compensated_ji(
+                0..n_active,
+                n_active..self.particles.n_real(),
+                soft2,
+                |i, j| self.ignore_gravity_terms.for_massive_test_particles(i, j),
+            );
         }
     }
 
@@ -508,7 +521,7 @@ impl GravityContext<'_> {
         self.particles[0].ay = 0.0;
         self.particles[0].az = 0.0;
 
-        let accels: Vec<(f64, f64, f64)> = (1..self.n_real)
+        let accels: Vec<(f64, f64, f64)> = (1..self.particles.n_real())
             .into_par_iter()
             .map(|i| {
                 let mut ax = 0.0;
@@ -542,7 +555,7 @@ impl GravityContext<'_> {
             self.particles[i + 1].az = az;
         }
 
-        if matches!(self.test_particle_type, TestParticleType::Massive) {
+        if matches!(self.test_particle_kind, TestParticleKind::Massive) {
             let accels_tp: Vec<(f64, f64, f64)> = (1..n_active)
                 .into_par_iter()
                 .map(|i| {
@@ -550,7 +563,7 @@ impl GravityContext<'_> {
                     let mut ay = 0.0;
                     let mut az = 0.0;
 
-                    for j in n_active..self.n_real {
+                    for j in n_active..self.particles.n_real() {
                         let dx = self.particles[i].x - self.particles[j].x;
                         let dy = self.particles[i].y - self.particles[j].y;
                         let dz = self.particles[i].z - self.particles[j].z;
@@ -629,7 +642,7 @@ impl GravityContext<'_> {
             self.particles[mi].az = az;
         }
 
-        if matches!(self.test_particle_type, TestParticleType::Massive) {
+        if matches!(self.test_particle_kind, TestParticleKind::Massive) {
             let accels: Vec<(f64, f64, f64)> = (1..m.n_encounter_active)
                 .into_par_iter()
                 .map(|i| {
@@ -696,7 +709,7 @@ impl GravityContext<'_> {
         self.particles[0].ay = 0.0;
         self.particles[0].az = 0.0;
 
-        let accels: Vec<(f64, f64, f64)> = (1..self.n_real)
+        let accels: Vec<(f64, f64, f64)> = (1..self.particles.n_real())
             .into_par_iter()
             .map(|i| {
                 let mut ax = 0.0;
@@ -732,7 +745,7 @@ impl GravityContext<'_> {
             self.particles[i + 1].az = az;
         }
 
-        if matches!(self.test_particle_type, TestParticleType::Massive) {
+        if matches!(self.test_particle_kind, TestParticleKind::Massive) {
             let accels_tp: Vec<(f64, f64, f64)> = (1..n_active)
                 .into_par_iter()
                 .map(|i| {
@@ -740,7 +753,7 @@ impl GravityContext<'_> {
                     let mut ay = 0.0;
                     let mut az = 0.0;
 
-                    for j in n_active..self.n_real {
+                    for j in n_active..self.particles.n_real() {
                         if t.current_ks[j * n + i] != 0 {
                             continue;
                         }
@@ -820,7 +833,7 @@ impl GravityContext<'_> {
             self.particles[mi].az = az;
         }
 
-        if matches!(self.test_particle_type, TestParticleType::Massive) {
+        if matches!(self.test_particle_kind, TestParticleKind::Massive) {
             let accels: Vec<(f64, f64, f64)> = (1..t.n_encounter_active)
                 .into_par_iter()
                 .map(|i| {
@@ -863,10 +876,10 @@ impl GravityContext<'_> {
 
 impl Gravity {
     pub fn apply(&self, ctx: &mut GravityContext<'_>) {
-        let n_active = if ctx.n_active == usize::MAX {
-            ctx.n_real
+        let n_active = if ctx.particles.are_all_active() {
+            ctx.particles.n_real()
         } else {
-            ctx.n_active
+            ctx.particles.n_active()
         };
 
         let soft2 = ctx.softening * ctx.softening;

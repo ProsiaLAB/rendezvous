@@ -1,7 +1,7 @@
 use std::ops::ControlFlow;
 
 use prosia_extensions::types::Vec3;
-use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
+use rayon::iter::ParallelIterator;
 
 use crate::boundary::Boundary;
 use crate::collision::{Collision, CollisionResolver};
@@ -9,7 +9,7 @@ use crate::gravity::{Gravity, GravityContext, IgnoreGravityTerms};
 use crate::integrator::{ForceSplit, Synchronize};
 use crate::integrator::{Integrator, StepContext, SyncContext};
 use crate::ode::OdeState;
-use crate::particle::{Particle, TestParticleType};
+use crate::particle::{Particle, Particles, TestParticleKind};
 use crate::tree::{NodeId, NodeKind, Tree, TreeKind};
 
 type StepDecision = ControlFlow<ExitStatus, ()>;
@@ -29,11 +29,7 @@ pub struct Simulation {
     /// Number of steps done.
     pub steps_done: usize,
 
-    /// Number of *real* particles.
-    /// Corresponds to `(r->N - r->N_var)` in the C version.
-    pub n_real: usize,
-    /// Number of variational particles, if any.
-    pub n_var: Option<usize>,
+    pub var_cfg: Option<Vec<VariationalConfig>>,
 
     pub run_state: RunState,
 
@@ -55,7 +51,6 @@ pub struct Simulation {
     pub track_energy_offset: bool,
     pub energy_offset: f64,
 
-    pub n_active: usize,
     pub exit_max_distance: Option<f64>,
     pub exit_min_distance: Option<f64>,
     pub exact_finish_time: bool,
@@ -65,9 +60,9 @@ pub struct Simulation {
     /// In general, the integrators will set this variable
     /// automatically and nothing needs to be changed by the user.
     pub ignore_gravity_terms: IgnoreGravityTerms,
-    pub test_particle_type: TestParticleType,
+    pub test_particle_kind: TestParticleKind,
 
-    pub particles: Vec<Particle>,
+    pub particles: Particles,
     pub odes: Vec<OdeState>,
     pub gravity_cs: Vec<Vec3>,
 
@@ -84,8 +79,8 @@ pub struct Simulation {
     pub opening_angle: f64,
 }
 
-impl Simulation {
-    pub fn init(integrator: Integrator) -> Self {
+impl Default for Simulation {
+    fn default() -> Self {
         Simulation {
             t: 0.0,
             g: 1.0,
@@ -112,8 +107,7 @@ impl Simulation {
             run_state: RunState::Running,
 
             heartbeat: None,
-            n_real: 0,
-            n_var: None,
+            var_cfg: None,
 
             gravity: Gravity::Basic,
             collision: Collision::None,
@@ -122,14 +116,13 @@ impl Simulation {
             track_energy_offset: false,
             energy_offset: 0.0,
 
-            n_active: usize::MAX,
-            test_particle_type: TestParticleType::Massless,
+            test_particle_kind: TestParticleKind::Passive,
 
-            particles: Vec::new(),
+            particles: Particles::default(),
             odes: Vec::new(),
             gravity_cs: Vec::new(),
 
-            integrator,
+            integrator: Integrator::default(),
             additional_forces: None,
             pre_time_step_modifications: None,
             post_time_step_modifications: None,
@@ -137,6 +130,15 @@ impl Simulation {
             tree: None,
             tree_needs_update: false,
             opening_angle: 0.25,
+        }
+    }
+}
+
+impl Simulation {
+    pub fn init(integrator: Integrator) -> Self {
+        Simulation {
+            integrator,
+            ..Default::default()
         }
     }
 
@@ -196,8 +198,8 @@ impl Simulation {
         self.particles.push(p);
 
         match &mut self.integrator {
-            Integrator::Mercurius(m) => m.add(self.g, self.dt, self.n_active, &self.particles),
-            Integrator::Trace(t) => t.add(self.n_active, &self.particles),
+            Integrator::Mercurius(m) => m.add(self.g, self.dt, &self.particles),
+            Integrator::Trace(t) => t.add(&self.particles),
             _ => {}
         }
     }
@@ -269,7 +271,7 @@ impl Simulation {
 
         if let Some(max_distance) = self.exit_max_distance {
             let max2 = max_distance * max_distance;
-            for p in self.particles.iter().take(self.n_real) {
+            for p in self.particles.real_iter() {
                 let r2 = p.x * p.x + p.y * p.y + p.z * p.z;
                 if r2 > max2 {
                     return ControlFlow::Break(ExitStatus::Escape);
@@ -279,7 +281,7 @@ impl Simulation {
 
         if let Some(min_distance) = self.exit_min_distance {
             let min2 = min_distance * min_distance;
-            for i in 0..self.n_real {
+            for i in 0..self.particles.n_real() {
                 let p = &self.particles[i];
                 for j in 0..i {
                     let q = &self.particles[j];
@@ -476,16 +478,16 @@ impl Simulation {
     }
 
     fn energy(&self) -> f64 {
-        let n_active = if self.n_active == usize::MAX {
-            self.n_real
+        let n_active = if self.particles.are_all_active() {
+            self.particles.n_real()
         } else {
-            self.n_active
+            self.particles.n_active()
         };
 
-        let n_interacting = if matches!(self.test_particle_type, TestParticleType::Massless) {
-            self.n_active
+        let n_interacting = if matches!(self.test_particle_kind, TestParticleKind::Passive) {
+            self.particles.n_active()
         } else {
-            self.n_real
+            self.particles.n_real()
         };
 
         let mut e_kin = 0.0;
@@ -535,7 +537,7 @@ impl Simulation {
             eprintln!("WARNING: Removing the last particle from the simulation.");
         }
 
-        if self.n_var.is_some() {
+        if self.particles.any_variational() {
             eprintln!(
                 "WARNING: Removing particles not supported when calculating MEGNO. \
                  The particle was not removed."
@@ -544,9 +546,6 @@ impl Simulation {
 
         if keep_sorted {
             self.particles.remove(pi);
-            if pi < self.n_active {
-                self.n_active -= 1;
-            }
 
             if self.tree.is_some() {
                 eprintln!(
@@ -688,8 +687,6 @@ impl Simulation {
 
         let mut ctx = GravityContext {
             particles: &mut self.particles,
-            n_real: self.n_real,
-            n_active: self.n_active,
             g: self.g,
             t: self.t,
             integrator: &self.integrator,
@@ -700,7 +697,7 @@ impl Simulation {
             box_size: &self.box_size,
             ignore_gravity_terms: &self.ignore_gravity_terms,
             softening: self.softening,
-            test_particle_type: &self.test_particle_type,
+            test_particle_kind: &self.test_particle_kind,
             gravity_cs: &mut self.gravity_cs,
             tree: self.tree.as_ref(),
             opening_angle: self.opening_angle,
@@ -721,24 +718,21 @@ impl Simulation {
         todo!()
     }
 
-    pub fn get_sync_context(&mut self) -> SyncContext<'_> {
-        SyncContext {
-            particles: &mut self.particles,
-        }
-    }
-
     pub fn synchronize(&mut self) {
-        let ctx = SyncContext {
+        let mut ctx = SyncContext {
+            var_cfg: self.var_cfg.as_ref(),
             particles: &mut self.particles,
-            // TODO: add other fields as needed
+            gravity: &mut self.gravity,
+            ignore_gravity_terms: &mut self.ignore_gravity_terms,
+            test_particle_kind: &self.test_particle_kind,
         };
 
         match &mut self.integrator {
-            Integrator::WHFast(w) => w.synchronize(ctx),
-            Integrator::Saba(s) => s.synchronize(ctx),
-            Integrator::Mercurius(m) => m.synchronize(ctx),
-            Integrator::Janus(j) => j.synchronize(ctx),
-            Integrator::Eos(e) => e.synchronize(ctx),
+            Integrator::WHFast(w) => w.synchronize(&mut ctx),
+            Integrator::Saba(s) => s.synchronize(&mut ctx),
+            Integrator::Mercurius(m) => m.synchronize(&mut ctx),
+            Integrator::Janus(j) => j.synchronize(&mut ctx),
+            Integrator::Eos(e) => e.synchronize(&mut ctx),
 
             // No-ops
             Integrator::Ias15(_)
@@ -816,10 +810,10 @@ impl Simulation {
             pre_mod(self);
             match &mut self.integrator {
                 Integrator::WHFast(w) => {
-                    w.recalculate_coordinates_this_time_step = true;
+                    w.recalculate_coordinates();
                 }
                 Integrator::Mercurius(m) => {
-                    m.recalculate_coordinates_this_time_step = true;
+                    m.recalculate_coordinates();
                 }
                 _ => {}
             }
@@ -841,7 +835,7 @@ impl Simulation {
 
         self.update_accelerations();
 
-        if self.n_var.is_some() {
+        if self.particles.any_variational() {
             self.update_accelerations_for_variational_particles();
         }
 
@@ -856,16 +850,16 @@ impl Simulation {
             post_mod(self);
             match &mut self.integrator {
                 Integrator::WHFast(w) => {
-                    w.recalculate_coordinates_this_time_step = true;
+                    w.recalculate_coordinates();
                 }
                 Integrator::Mercurius(m) => {
-                    m.recalculate_coordinates_this_time_step = true;
+                    m.recalculate_coordinates();
                 }
                 _ => {}
             }
         }
 
-        if self.n_var.is_some() {
+        if self.particles.any_variational() {
             self.rescale_variational_particles();
         }
 
@@ -924,4 +918,12 @@ pub enum ExitStatus {
     User,
     SigInt,
     Collision,
+}
+
+pub struct VariationalConfig {
+    pub order: usize,
+    pub is_test_particle: bool,
+    pub index_first_order_a: usize,
+    pub index_first_order_b: usize,
+    pub log_rescale_accum: f64,
 }
