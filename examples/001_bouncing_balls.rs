@@ -2,13 +2,13 @@ use rendezvous::{
     collision::{Collision, CollisionResolver},
     gravity::Gravity,
     integrator::Integrator,
-    leapfrog::LeapFrog,
     particle::Particle,
     rendezvous::Simulation,
 };
 
 fn main() {
-    let mut sim = Simulation::init(Integrator::LeapFrog(LeapFrog));
+    let integrator = Integrator::default();
+    let mut sim = Simulation::init(integrator);
 
     sim.dt = 1e-2;
     sim.gravity = Gravity::Basic;
