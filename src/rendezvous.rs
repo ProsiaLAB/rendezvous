@@ -720,11 +720,13 @@ impl Simulation {
 
     pub fn synchronize(&mut self) {
         let mut ctx = SyncContext {
+            g: self.g,
             var_cfg: self.var_cfg.as_ref(),
             particles: &mut self.particles,
             gravity: &mut self.gravity,
             ignore_gravity_terms: &mut self.ignore_gravity_terms,
             test_particle_kind: &self.test_particle_kind,
+            dt: self.dt,
         };
 
         match &mut self.integrator {
@@ -922,6 +924,7 @@ pub enum ExitStatus {
 
 pub struct VariationalConfig {
     pub order: usize,
+    pub index: usize,
     pub is_test_particle: bool,
     pub index_first_order_a: usize,
     pub index_first_order_b: usize,

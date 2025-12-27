@@ -1,7 +1,7 @@
 use thiserror::Error;
 
 use crate::gravity::{Gravity, IgnoreGravityTerms};
-use crate::particle::{Particle, Particles, TestParticleKind};
+use crate::particle::{Particles, TestParticleKind};
 
 use crate::eos::Eos;
 use crate::gbs::Gbs;
@@ -70,11 +70,13 @@ impl ForceSplit for Integrator {
 }
 
 pub struct SyncContext<'a> {
+    pub g: f64,
     pub var_cfg: Option<&'a Vec<VariationalConfig>>,
     pub particles: &'a mut Particles,
     pub gravity: &'a mut Gravity,
     pub ignore_gravity_terms: &'a mut IgnoreGravityTerms,
     pub test_particle_kind: &'a TestParticleKind,
+    pub dt: f64,
 }
 
 pub struct StepContext<'a> {

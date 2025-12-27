@@ -1,6 +1,8 @@
 use std::ops::{Index, IndexMut};
 
-use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator};
+use rayon::iter::{
+    IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator,
+};
 
 use crate::tree::NodeId;
 
@@ -196,9 +198,30 @@ pub trait Transformations {
         n_active: usize,
     );
 
-    fn transform_dhc_to_inertial_posvel(&mut self);
-    fn transform_whds_to_inertial_posvel(&mut self);
-    fn transform_barycentric_to_inertial_posvel(&mut self);
+    fn transform_dhc_to_inertial_posvel(
+        &mut self,
+        dhc: &[Particle],
+        n_real: usize,
+        n_active: usize,
+    );
+
+    fn transform_dhc_to_inertial_pos(&mut self, dhc: &[Particle], n_real: usize, n_active: usize);
+
+    fn transform_whds_to_inertial_pos(&mut self, whds: &[Particle], n_real: usize, n_active: usize);
+
+    fn transform_whds_to_inertial_posvel(
+        &mut self,
+        whds: &[Particle],
+        n_real: usize,
+        n_active: usize,
+    );
+
+    fn transform_barycentric_to_inertial_posvel(
+        &mut self,
+        bary: &[Particle],
+        n_real: usize,
+        n_active: usize,
+    );
 }
 
 impl Transformations for [Particle] {
@@ -262,9 +285,196 @@ impl Transformations for [Particle] {
         self[0].vz = s_vz * mi;
     }
 
-    fn transform_dhc_to_inertial_posvel(&mut self) {}
-    fn transform_whds_to_inertial_posvel(&mut self) {}
-    fn transform_barycentric_to_inertial_posvel(&mut self) {}
+    fn transform_dhc_to_inertial_pos(&mut self, dhc: &[Particle], n_real: usize, n_active: usize) {
+        let mtot = dhc[0].m;
+
+        let (x0, y0, z0) = self[1..n_active]
+            .par_iter_mut()
+            .zip(&dhc[1..n_active])
+            .map(|(p, ph)| {
+                let m = ph.m;
+                p.m = m;
+                (ph.x * m / mtot, ph.y * m / mtot, ph.z * m / mtot)
+            })
+            .reduce(|| (0.0, 0.0, 0.0), |a, b| (a.0 + b.0, a.1 + b.1, a.2 + b.2));
+
+        self[0].x = dhc[0].x - x0;
+        self[0].y = dhc[0].y - y0;
+        self[0].z = dhc[0].z - z0;
+
+        let x0 = self[0].x;
+        let y0 = self[0].y;
+        let z0 = self[0].z;
+
+        self[1..n_real]
+            .par_iter_mut()
+            .zip(&dhc[1..n_real])
+            .for_each(|(p, ph)| {
+                p.x = ph.x + x0;
+                p.y = ph.y + y0;
+                p.z = ph.z + z0;
+            });
+    }
+
+    fn transform_dhc_to_inertial_posvel(
+        &mut self,
+        dhc: &[Particle],
+        n_real: usize,
+        n_active: usize,
+    ) {
+        self.transform_dhc_to_inertial_pos(dhc, n_real, n_active);
+
+        let m0 = self[0].m;
+
+        let vx0 = self[0].vx;
+        let vy0 = self[0].vy;
+        let vz0 = self[0].vz;
+
+        self[1..n_real]
+            .par_iter_mut()
+            .zip(&dhc[1..n_real])
+            .for_each(|(p, ph)| {
+                p.vx = ph.vx + vx0;
+                p.vy = ph.vy + vy0;
+                p.vz = ph.vz + vz0;
+            });
+
+        let (vx0, vy0, vz0) = self[1..n_active]
+            .par_iter_mut()
+            .zip(&dhc[1..n_active])
+            .map(|(p, ph)| {
+                let m = p.m;
+                (ph.vx * m / m0, ph.vy * m / m0, ph.vz * m / m0)
+            })
+            .reduce(|| (0.0, 0.0, 0.0), |a, b| (a.0 + b.0, a.1 + b.1, a.2 + b.2));
+
+        self[0].vx = dhc[0].vx - vx0;
+        self[0].vy = dhc[0].vy - vy0;
+        self[0].vz = dhc[0].vz - vz0;
+    }
+
+    fn transform_whds_to_inertial_pos(
+        &mut self,
+        whds: &[Particle],
+        n_real: usize,
+        n_active: usize,
+    ) {
+        self.transform_dhc_to_inertial_pos(whds, n_real, n_active);
+    }
+
+    fn transform_whds_to_inertial_posvel(
+        &mut self,
+        whds: &[Particle],
+        n_real: usize,
+        n_active: usize,
+    ) {
+        self.transform_whds_to_inertial_pos(whds, n_real, n_active);
+
+        let m0 = self[0].m;
+
+        let whds_vx0 = whds[0].vx;
+        let whds_vy0 = whds[0].vy;
+        let whds_vz0 = whds[0].vz;
+
+        self[1..n_active]
+            .par_iter_mut()
+            .zip(&whds[1..n_active])
+            .for_each(|(p, ph)| {
+                let mi = p.m;
+                let mf = (m0 + mi) / m0;
+                p.vx = ph.vx / mf + whds_vx0;
+                p.vy = ph.vy / mf + whds_vy0;
+                p.vz = ph.vz / mf + whds_vz0;
+            });
+
+        self[n_active..n_real]
+            .par_iter_mut()
+            .zip(&whds[n_active..n_real])
+            .for_each(|(p, ph)| {
+                p.vx = ph.vx + whds_vx0;
+                p.vy = ph.vy + whds_vy0;
+                p.vz = ph.vz + whds_vz0;
+            });
+
+        let (vx0, vy0, vz0) = self[1..n_active]
+            .par_iter_mut()
+            .zip(&whds[1..n_active])
+            .map(|(p, ph)| {
+                let m = p.m;
+                (
+                    ph.vx * m / (m0 + m),
+                    ph.vy * m / (m0 + m),
+                    ph.vz * m / (m0 + m),
+                )
+            })
+            .reduce(|| (0.0, 0.0, 0.0), |a, b| (a.0 + b.0, a.1 + b.1, a.2 + b.2));
+
+        self[0].vx = whds[0].vx - vx0;
+        self[0].vy = whds[0].vy - vy0;
+        self[0].vz = whds[0].vz - vz0;
+    }
+
+    fn transform_barycentric_to_inertial_posvel(
+        &mut self,
+        bary: &[Particle],
+        n_real: usize,
+        n_active: usize,
+    ) {
+        self[0].x = bary[0].m * bary[0].x;
+        self[0].y = bary[0].m * bary[0].y;
+        self[0].z = bary[0].m * bary[0].z;
+        self[0].vx = bary[0].m * bary[0].vx;
+        self[0].vy = bary[0].m * bary[0].vy;
+        self[0].vz = bary[0].m * bary[0].vz;
+        self[0].m = bary[0].m;
+
+        let mut s_x = 0.0;
+        let mut s_y = 0.0;
+        let mut s_z = 0.0;
+        let mut s_vx = 0.0;
+        let mut s_vy = 0.0;
+        let mut s_vz = 0.0;
+        let mut s_m = 0.0;
+
+        for i in 1..n_real {
+            let p_bi = &bary[i];
+            let p_b0 = &bary[0];
+            let pi = &mut self[i];
+            pi.x = p_bi.x + p_b0.x;
+            pi.y = p_bi.y + p_b0.y;
+            pi.z = p_bi.z + p_b0.z;
+            pi.vx = p_bi.vx + p_b0.vx;
+            pi.vy = p_bi.vy + p_b0.vy;
+            pi.vz = p_bi.vz + p_b0.vz;
+            if i < n_active {
+                let m = p_bi.m;
+                pi.m = m;
+                s_x += pi.x * m;
+                s_y += pi.y * m;
+                s_z += pi.z * m;
+                s_vx += pi.vx * m;
+                s_vy += pi.vy * m;
+                s_vz += pi.vz * m;
+                s_m += m;
+            }
+        }
+
+        self[0].x -= s_x;
+        self[0].y -= s_y;
+        self[0].z -= s_z;
+        self[0].vx -= s_vx;
+        self[0].vy -= s_vy;
+        self[0].vz -= s_vz;
+        self[0].m -= s_m;
+
+        let m0i = 1.0 / self[0].m;
+        self[0].x *= m0i;
+        self[0].y *= m0i;
+        self[0].z *= m0i;
+        self[0].vx *= m0i;
+        self[0].vy *= m0i;
+        self[0].vz *= m0i;
+    }
 }
 
 impl Index<usize> for Particles {

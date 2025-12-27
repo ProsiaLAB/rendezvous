@@ -1,5 +1,9 @@
 #![allow(clippy::excessive_precision)]
 
+use std::f64::consts::PI;
+use std::mem;
+
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use thiserror::Error;
 
 use crate::gravity::{Gravity, IgnoreGravityTerms};
@@ -74,6 +78,9 @@ const INVERSE_FACTORIALS: [f64; 35] = [
     1. / 295232799039604140847618609643520000000.,
 ];
 
+const NMAX_QUARTIC: usize = 64;
+const NMAX_NEWTON: usize = 32;
+
 pub struct WHFast {
     recalculate_coordinates_this_time_step: bool,
     coordinates: Coordinates,
@@ -83,6 +90,7 @@ pub struct WHFast {
     keep_unsynchoronized: bool,
     safe_mode: SafeMode,
     particles: Option<Particles>,
+    time_step_warning: usize,
 }
 
 impl WHFast {
@@ -150,13 +158,241 @@ impl WHFast {
         self.recalculate_coordinates_this_time_step = true;
     }
 
-    pub fn kepler_step(&mut self) {}
+    fn kepler_solver(&mut self, ctx: &SyncContext<'_>, i: usize, mass: f64, dt: f64) {
+        let (x0, y0, z0, vx0, vy0, vz0) = {
+            let particles = self.particles.as_ref().unwrap();
+            let p1 = &particles[i];
+            (p1.x, p1.y, p1.z, p1.vx, p1.vy, p1.vz)
+        };
 
-    pub fn com_step(&mut self) {}
+        let r0 = (x0 * x0 + y0 * y0 + z0 * z0).sqrt();
+        let r0i = 1.0 / r0;
+        let v2 = vx0 * vx0 + vy0 * vy0 + vz0 * vz0;
+        let beta = 2.0 * mass * r0i - v2;
+        let eta0 = x0 * vx0 + y0 * vy0 + z0 * vz0;
+        let zeta0 = mass - beta * r0;
 
-    pub fn apply_corrector(&mut self) {}
+        let mut gs = [0.0; 6];
 
-    pub fn apply_secondary_corrector(&mut self) {}
+        struct BetaVals {
+            x_per_period: f64,
+            inv_period: f64,
+        }
+
+        let betvals = if beta > 0.0 {
+            Some(BetaVals {
+                x_per_period: 2.0 * PI * beta.sqrt(),
+                inv_period: beta.sqrt() * beta / (2.0 * PI * mass),
+            })
+        } else {
+            None
+        };
+
+        let mut x = if let Some(bv) = &betvals {
+            if dt.abs() * bv.inv_period > 1.0 && self.time_step_warning == 0 {
+                self.time_step_warning += 1;
+                eprintln!(
+                    "WARNING: WHFast is having convergence issues because the time step is \
+                     comparable to or larger than the orbital period (dt * inv_period = {}). \
+                     Consider reducing the time step.",
+                    dt.abs() * bv.inv_period
+                );
+            }
+
+            let dtr0i = dt * r0i;
+            dtr0i * (1.0 - dtr0i * eta0 * 0.5 * r0i)
+        } else {
+            0.0
+        };
+
+        let mut converged = false;
+        let mut old_x = x;
+
+        stiefel::gs3(&mut gs, beta, x);
+
+        let val = eta0 * gs[1] + zeta0 * gs[2];
+
+        let mut ri = 1.0 / (r0 + val);
+
+        x = ri * (x * val - eta0 * gs[2] - zeta0 * gs[3] + dt);
+
+        if let Some(bv) = &betvals {
+            if (x - old_x).abs() > 0.01 * bv.x_per_period {
+                // Quartic solver
+                // Linear initial guess
+                x = beta * dt / mass;
+                let mut prev_x = [0.0; NMAX_QUARTIC + 1];
+                for n_lag in 1..NMAX_QUARTIC {
+                    stiefel::gs3(&mut gs, beta, x);
+                    let f = r0 * x + eta0 * gs[2] + zeta0 * gs[3] - dt;
+                    let fp = r0 + eta0 * gs[1] + zeta0 * gs[2];
+                    let fpp = eta0 * gs[0] + zeta0 * gs[1];
+                    let denom = fp + (16.0 * fp * fp - 20.0 * f * fpp).abs().sqrt();
+                    let x_new = (x * denom - 5.0 * f) / denom;
+
+                    for &pxi in prev_x.iter().take(n_lag).skip(1) {
+                        if (x_new - pxi).abs() < 1e-12 {
+                            converged = true;
+                            break;
+                        }
+                    }
+
+                    if converged {
+                        break;
+                    }
+
+                    prev_x[n_lag] = x_new;
+                    x = x_new;
+                }
+                let val = eta0 * gs[1] + zeta0 * gs[2];
+                ri = 1.0 / (r0 + val);
+            } else {
+                // Newton's method
+
+                for _ in 1..NMAX_NEWTON {
+                    let old_x2 = old_x;
+                    old_x = x;
+                    stiefel::gs3(&mut gs, beta, x);
+                    let val = eta0 * gs[1] + zeta0 * gs[2];
+                    let ri = 1.0 / (r0 + val);
+                    x = ri * (x * val - eta0 * gs[2] - zeta0 * gs[3] + dt);
+                    if x == old_x || x == old_x2 {
+                        converged = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if !converged {
+            let (mut xmin, mut xmax) = if let Some(bv) = &betvals {
+                let xmin = bv.x_per_period * (dt * bv.inv_period).floor();
+                let xmax = xmin + bv.x_per_period;
+                (xmin, xmax)
+            } else {
+                // Hyperbolic
+                let h2 = r0 * r0 * v2 - eta0 * eta0;
+                let q = h2 / mass / (1.0 + (1.0 - h2 * beta / (mass * mass)).sqrt());
+                let vq = (h2.sqrt() / q).copysign(dt);
+                let mut xmin = dt / ((vq * dt).abs() + r0);
+                let mut xmax = dt / q;
+                if dt < 0.0 {
+                    mem::swap(&mut xmin, &mut xmax);
+                }
+                (xmin, xmax)
+            };
+            x = 0.5 * (xmin + xmax);
+
+            loop {
+                stiefel::gs3(&mut gs, beta, x);
+                let s = r0 * x + eta0 * gs[2] + zeta0 * gs[3] - dt;
+                if s >= 0.0 {
+                    xmax = x;
+                } else {
+                    xmin = x;
+                }
+                x = 0.5 * (xmin + xmax);
+
+                if (xmax - xmin).abs() > ((xmax + xmin) * 1e-15).abs() {
+                    break;
+                }
+            }
+            let val = eta0 * gs[1] + zeta0 * gs[2];
+            ri = 1.0 / (r0 + val);
+        }
+
+        if ri.is_nan() {
+            ri = 0.0;
+            gs[1] = 0.0;
+            gs[2] = 0.0;
+            gs[3] = 0.0;
+        }
+
+        let f = -mass * gs[2] * r0i;
+        let g = dt - mass * gs[3];
+        let fd = -mass * gs[1] * r0i * ri;
+        let gd = -mass * gs[2] * ri;
+
+        let particles = self.particles.as_mut().unwrap();
+
+        particles[i].x += f * x0 + g * vx0;
+        particles[i].y += f * y0 + g * vy0;
+        particles[i].z += f * z0 + g * vz0;
+
+        particles[i].vx += fd * x0 + gd * vx0;
+        particles[i].vy += fd * y0 + gd * vy0;
+        particles[i].vz += fd * z0 + gd * vz0;
+
+        // Variations
+        if let Some(vcs) = ctx.var_cfg {
+            for vc in vcs.iter() {
+                stiefel::gs(&mut gs, beta, x);
+                let dp1 = &mut particles[vc.index + i];
+                let dr0 = (dp1.x * x0 + dp1.y * y0 + dp1.z * z0) * r0i;
+                let dbeta = -2.0 * mass * dr0 * r0i * r0i
+                    - 2.0 * (dp1.vx * vx0 + dp1.vy * vy0 + dp1.vz * vz0);
+                let deta0 = dp1.x * vx0
+                    + x0 * dp1.vx
+                    + dp1.y * vy0
+                    + y0 * dp1.vy
+                    + dp1.z * vz0
+                    + z0 * dp1.vz;
+                let dzeta0 = -beta * dr0 - r0 * dbeta;
+                let g3_beta = 0.5 * (3.0 * gs[5] - x * gs[4]);
+                let g2_beta = 0.5 * (2.0 * gs[4] - x * gs[3]);
+                let g1_beta = 0.5 * (gs[3] - x * gs[2]);
+                let tbeta = eta0 * g2_beta + zeta0 * g3_beta;
+                let dx = -ri * (x * dr0 + gs[2] * deta0 + gs[3] * dzeta0 + tbeta * dbeta);
+                let dg1 = gs[0] * dx + g1_beta * dbeta;
+                let dg2 = gs[1] * dx + g2_beta * dbeta;
+                let dg3 = gs[2] * dx + g3_beta * dbeta;
+                let dr = dr0 + gs[1] * deta0 + gs[2] * dzeta0 + eta0 * dg1 + zeta0 * dg2;
+                let df = mass * gs[2] * dr0 * r0i * r0i - mass * dg2 * r0i;
+                let dg = -mass * dg3;
+                let dfd = -mass * dg1 * r0i * ri + mass * gs[1] * (dr0 * r0i + dr * ri) * r0i * ri;
+                let dgd = -mass * dg2 * ri + mass * gs[2] * dr * ri * ri;
+
+                dp1.x += f * dp1.x + g * dp1.vx + df * x0 + dg * vx0;
+                dp1.y += f * dp1.y + g * dp1.vy + df * y0 + dg * vy0;
+                dp1.z += f * dp1.z + g * dp1.vz + df * z0 + dg * vz0;
+
+                dp1.vx += fd * dp1.x + gd * dp1.vx + dfd * x0 + dgd * vx0;
+                dp1.vy += fd * dp1.y + gd * dp1.vy + dfd * y0 + dgd * vy0;
+                dp1.vz += fd * dp1.z + gd * dp1.vz + dfd * z0 + dgd * vz0;
+            }
+        }
+    }
+
+    fn kepler_step(&mut self, ctx: &mut SyncContext<'_>, dt: f64) {
+        let m0 = ctx.particles[0].m;
+        let n_active = if ctx.particles.are_all_active()
+            || matches!(ctx.test_particle_kind, TestParticleKind::Massive)
+        {
+            ctx.particles.n_real()
+        } else {
+            ctx.particles.n_active()
+        };
+
+        let mut eta = m0;
+
+        match self.coordinates {
+            Coordinates::Jacobi => {}
+            Coordinates::DemocraticHeliocentric => {}
+            Coordinates::Whds => {}
+            Coordinates::Barycentric => {}
+        }
+    }
+
+    fn com_step(&mut self, dt: f64) {
+        let particles = self.particles.as_mut().unwrap();
+        particles[0].x += particles[0].vx * dt;
+        particles[0].y += particles[0].vy * dt;
+        particles[0].z += particles[0].vz * dt;
+    }
+
+    fn apply_corrector(&mut self) {}
+
+    fn apply_secondary_corrector(&mut self) {}
 }
 
 impl Synchronize for WHFast {
@@ -174,7 +410,7 @@ impl Synchronize for WHFast {
             ctx.particles.n_active()
         };
 
-        let mut p_jh = match self.particles.take() {
+        let sync_particles = match self.particles.take() {
             Some(p) => p,
             None => return,
         };
@@ -182,12 +418,12 @@ impl Synchronize for WHFast {
         match self.kernel {
             Kernel::Default | Kernel::ModifiedKick => {}
             Kernel::Lazy => {
-                self.kepler_step();
-                self.com_step();
+                self.kepler_step(ctx, ctx.dt / 2.0);
+                self.com_step(ctx.dt / 2.0);
             }
             Kernel::Composition => {
-                self.kepler_step();
-                self.com_step();
+                self.kepler_step(ctx, 3.0 * ctx.dt / 8.0);
+                self.com_step(3.0 * ctx.dt / 8.0);
             }
         }
 
@@ -211,7 +447,7 @@ impl Synchronize for WHFast {
                 ctx.particles
                     .as_mut_slice()
                     .transform_jacobi_to_inertial_posvel(
-                        p_jh.as_slice(),
+                        sync_particles.as_slice(),
                         &masses,
                         n_real,
                         n_active,
@@ -220,26 +456,40 @@ impl Synchronize for WHFast {
             Coordinates::DemocraticHeliocentric => {
                 ctx.particles
                     .as_mut_slice()
-                    .transform_dhc_to_inertial_posvel();
+                    .transform_dhc_to_inertial_posvel(sync_particles.as_slice(), n_real, n_active);
             }
             Coordinates::Whds => {
                 ctx.particles
                     .as_mut_slice()
-                    .transform_whds_to_inertial_posvel();
+                    .transform_whds_to_inertial_posvel(sync_particles.as_slice(), n_real, n_active);
             }
             Coordinates::Barycentric => {
                 ctx.particles
                     .as_mut_slice()
-                    .transform_barycentric_to_inertial_posvel();
+                    .transform_barycentric_to_inertial_posvel(
+                        sync_particles.as_slice(),
+                        n_real,
+                        n_active,
+                    );
             }
         }
 
+        let var_particles = ctx.particles.variational_mut();
+        let sync_var_particles = sync_particles.variational();
+
         if let Some(vcs) = ctx.var_cfg {
-            // TODO
+            for vc in vcs.iter() {
+                let start = vc.index;
+                let end = start + n_real;
+
+                let var = &mut var_particles[start..end];
+                let var_sync = &sync_var_particles[start..end];
+                var.transform_jacobi_to_inertial_posvel(var_sync, &masses, n_real, n_active);
+            }
         }
 
         if self.keep_unsynchoronized {
-            self.particles = Some(p_jh);
+            self.particles = Some(sync_particles);
         } else {
             self.particles = None;
         }
@@ -323,4 +573,58 @@ pub enum WHFastError {
 
     #[error("Cannot keep unsynchronized particles when using SafeMode::Combine in WHFast")]
     InvalidSafeModeCombination,
+}
+
+mod stiefel {
+    use crate::whfast::stumpff;
+
+    pub(crate) fn gs(gs: &mut [f64], beta: f64, x: f64) {}
+
+    pub(crate) fn gs3(gs: &mut [f64], beta: f64, x: f64) {
+        let x2 = x * x;
+        stumpff::cs3(gs, beta * x2);
+        gs[1] *= x;
+        gs[2] *= x2;
+        gs[3] *= x2 * x;
+    }
+}
+
+mod stumpff {
+    use crate::whfast::INVERSE_FACTORIALS;
+
+    pub(crate) fn cs() {
+        todo!()
+    }
+
+    pub(crate) fn cs3(cs: &mut [f64], mut z: f64) {
+        let mut n = 0;
+
+        while z.abs() > 0.1 {
+            z /= 4.0;
+            n += 1;
+        }
+
+        const NMAX: usize = 13;
+
+        let mut c_odd = INVERSE_FACTORIALS[NMAX];
+        let mut c_even = INVERSE_FACTORIALS[NMAX - 1];
+
+        for np in (3..NMAX - 2).rev().step_by(2) {
+            c_odd = INVERSE_FACTORIALS[np] - z * c_odd;
+            c_even = INVERSE_FACTORIALS[np - 1] - z * c_even;
+        }
+
+        cs[3] = c_odd;
+        cs[2] = c_even;
+        cs[1] = INVERSE_FACTORIALS[1] - z * c_odd;
+        cs[0] = INVERSE_FACTORIALS[0] - z * c_even;
+
+        while n > 0 {
+            cs[3] = (cs[2] + cs[0] * cs[3]) * 0.25;
+            cs[2] = cs[1] * cs[1] * 0.5;
+            cs[1] *= cs[0];
+            cs[0] = 2.0 * cs[0] * cs[0] - 1.0;
+            n -= 1;
+        }
+    }
 }
