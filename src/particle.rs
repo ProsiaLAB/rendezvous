@@ -31,161 +31,124 @@ pub struct Particle {
 
 #[derive(Default)]
 pub struct Particles {
-    data: Vec<Particle>,
-    n_active: usize,
-    n_test: usize,
-    n_variational: usize,
+    pub active: Vec<Particle>,
+    pub test: Vec<Particle>,
+    pub variational: Vec<Particle>,
     all_active: bool,
 }
 
 impl Particles {
     pub fn len(&self) -> usize {
-        self.data.len()
-    }
-
-    pub fn n_real(&self) -> usize {
-        self.n_active + self.n_test
-    }
-
-    pub fn n_active(&self) -> usize {
-        self.n_active
-    }
-
-    pub fn active(&self) -> &[Particle] {
-        &self.data[..self.n_active]
-    }
-
-    pub fn active_mut(&mut self) -> &mut [Particle] {
-        &mut self.data[..self.n_active]
-    }
-
-    pub fn test(&self) -> &[Particle] {
-        &self.data[self.n_active..self.n_active + self.n_test]
-    }
-
-    pub fn test_mut(&mut self) -> &mut [Particle] {
-        &mut self.data[self.n_active..self.n_active + self.n_test]
-    }
-
-    pub fn variational(&self) -> &[Particle] {
-        &self.data[self.n_active + self.n_test..]
-    }
-
-    pub fn variational_mut(&mut self) -> &mut [Particle] {
-        &mut self.data[self.n_active + self.n_test..]
-    }
-
-    pub fn n_test(&self) -> usize {
-        self.n_test
-    }
-
-    pub fn n_variational(&self) -> usize {
-        self.n_variational
-    }
-
-    pub fn any_test(&self) -> bool {
-        self.n_test != 0
-    }
-
-    pub fn any_variational(&self) -> bool {
-        self.n_variational != 0
+        self.active.len() + self.test.len() + self.variational.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.data.is_empty()
+        self.len() == 0
+    }
+
+    pub fn n_real(&self) -> usize {
+        self.active.len() + self.test.len()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &Particle> {
+        self.active
+            .iter()
+            .chain(self.test.iter())
+            .chain(self.variational.iter())
+    }
+
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut Particle> {
+        self.active
+            .iter_mut()
+            .chain(self.test.iter_mut())
+            .chain(self.variational.iter_mut())
+    }
+
+    pub fn par_iter(&self) -> impl IndexedParallelIterator<Item = &Particle> {
+        self.active
+            .par_iter()
+            .chain(self.test.par_iter())
+            .chain(self.variational.par_iter())
+    }
+
+    pub fn par_iter_mut(&mut self) -> impl IndexedParallelIterator<Item = &mut Particle> {
+        self.active
+            .par_iter_mut()
+            .chain(self.test.par_iter_mut())
+            .chain(self.variational.par_iter_mut())
+    }
+
+    pub fn real_iter(&self) -> impl Iterator<Item = &Particle> {
+        self.active.iter().chain(self.test.iter())
+    }
+
+    pub fn real_iter_mut(&mut self) -> impl Iterator<Item = &mut Particle> {
+        self.active.iter_mut().chain(self.test.iter_mut())
+    }
+
+    pub fn real_par_iter(&self) -> impl IndexedParallelIterator<Item = &Particle> {
+        self.active.par_iter().chain(self.test.par_iter())
+    }
+
+    pub fn real_par_iter_mut(&mut self) -> impl IndexedParallelIterator<Item = &mut Particle> {
+        self.active.par_iter_mut().chain(self.test.par_iter_mut())
     }
 
     pub fn are_all_active(&self) -> bool {
         self.all_active
     }
 
-    pub fn push(&mut self, p: Particle) {
-        self.data.push(p);
-    }
-
-    pub fn as_slice(&self) -> &[Particle] {
-        &self.data
-    }
-
-    pub fn as_mut_slice(&mut self) -> &mut [Particle] {
-        &mut self.data
-    }
-
-    /// Returns an iterator over all real (non-variational) particles.
-    pub fn real_iter(&self) -> impl Iterator<Item = &Particle> {
-        let n_real = self.n_active + self.n_test;
-        self.data[..n_real].iter()
-    }
-
-    /// Returns a mutable iterator over all real (non-variational) particles.
-    pub fn real_iter_mut(&mut self) -> impl Iterator<Item = &mut Particle> {
-        let n_real = self.n_active + self.n_test;
-        self.data[..n_real].iter_mut()
-    }
-
-    /// Returns an iterator over all particles.
-    pub fn iter(&self) -> impl Iterator<Item = &Particle> {
-        self.data.iter()
-    }
-
-    /// Returns a mutable iterator over all particles.
-    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut Particle> {
-        self.data.iter_mut()
-    }
-
-    /// Returns a parallel iterator over all real (non-variational) particles.
-    pub fn real_par_iter(&self) -> impl IndexedParallelIterator<Item = &Particle> {
-        let n_real = self.n_active + self.n_test;
-        self.data[..n_real].par_iter()
-    }
-
-    /// Returns a mutable parallel iterator over all real (non-variational) particles.
-    pub fn real_par_iter_mut(&mut self) -> impl IndexedParallelIterator<Item = &mut Particle> {
-        let n_real = self.n_active + self.n_test;
-        self.data[..n_real].par_iter_mut()
-    }
-
-    /// Returns a parallel iterator over all particles.
-    pub fn par_iter(&self) -> impl IndexedParallelIterator<Item = &Particle> {
-        self.data.par_iter()
-    }
-
-    /// Returns a mutable parallel iterator over all particles.
-    pub fn par_iter_mut(&mut self) -> impl IndexedParallelIterator<Item = &mut Particle> {
-        self.data.par_iter_mut()
-    }
-
-    pub fn resize(&mut self, new_size: usize) {
-        self.data.resize(new_size, Particle::default());
-    }
-
-    pub fn remove(&mut self, index: usize) -> Particle {
-        let removed = self.data.remove(index);
-
-        if index < self.n_active {
-            self.n_active -= 1;
-        }
-
-        removed
-    }
-
-    pub fn swap_remove(&mut self, index: usize) {
-        self.data.swap_remove(index);
-    }
-
-    pub fn swap(&mut self, i: usize, j: usize) {
-        self.data.swap(i, j);
-    }
-
-    pub fn pop(&mut self) -> Option<Particle> {
-        self.data.pop()
+    pub fn resize_as(&mut self, other: &Particles) {
+        self.active.resize(other.active.len(), Particle::default());
+        self.test.resize(other.test.len(), Particle::default());
+        self.variational
+            .resize(other.variational.len(), Particle::default());
+        self.all_active = other.all_active;
     }
 
     pub fn clear(&mut self) {
-        self.data.clear();
-        self.n_active = 0;
-        self.n_test = 0;
-        self.n_variational = 0;
+        self.active.clear();
+        self.test.clear();
+        self.variational.clear();
+        self.all_active = true;
+    }
+}
+
+impl Index<usize> for Particles {
+    type Output = Particle;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        let n_active = self.active.len();
+        if index < n_active {
+            &self.active[index]
+        } else {
+            let index = index - n_active;
+            let n_test = self.test.len();
+            if index < n_test {
+                &self.test[index]
+            } else {
+                let index = index - n_test;
+                &self.variational[index]
+            }
+        }
+    }
+}
+
+impl IndexMut<usize> for Particles {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        let n_active = self.active.len();
+        if index < n_active {
+            &mut self.active[index]
+        } else {
+            let index = index - n_active;
+            let n_test = self.test.len();
+            if index < n_test {
+                &mut self.test[index]
+            } else {
+                let index = index - n_test;
+                &mut self.variational[index]
+            }
+        }
     }
 }
 
@@ -474,22 +437,6 @@ impl Transformations for [Particle] {
         self[0].vx *= m0i;
         self[0].vy *= m0i;
         self[0].vz *= m0i;
-    }
-}
-
-impl Index<usize> for Particles {
-    type Output = Particle;
-
-    fn index(&self, i: usize) -> &Self::Output {
-        debug_assert!(i < self.n_active + self.n_test + self.n_variational);
-        &self.data[i]
-    }
-}
-
-impl IndexMut<usize> for Particles {
-    fn index_mut(&mut self, i: usize) -> &mut Self::Output {
-        debug_assert!(i < self.n_active + self.n_test + self.n_variational);
-        &mut self.data[i]
     }
 }
 

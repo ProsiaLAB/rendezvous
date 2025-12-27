@@ -195,7 +195,7 @@ impl Simulation {
             }
         }
 
-        self.particles.push(p);
+        self.particles.active.push(p);
 
         match &mut self.integrator {
             Integrator::Mercurius(m) => m.add(self.g, self.dt, &self.particles),
@@ -232,7 +232,7 @@ impl Simulation {
         }
     }
 
-    pub fn is_particle_in_node(&self, node_id: NodeId) -> bool {
+    pub fn is_particle_inside_node(&self, node_id: NodeId) -> bool {
         let node = self.tree.as_ref().unwrap().get_node(node_id).unwrap();
         let pt = match node.kind {
             NodeKind::Leaf { particle: pt } => pt,
@@ -481,11 +481,11 @@ impl Simulation {
         let n_active = if self.particles.are_all_active() {
             self.particles.n_real()
         } else {
-            self.particles.n_active()
+            self.particles.active.len()
         };
 
         let n_interacting = if matches!(self.test_particle_kind, TestParticleKind::Passive) {
-            self.particles.n_active()
+            self.particles.active.len()
         } else {
             self.particles.n_real()
         };
@@ -537,7 +537,7 @@ impl Simulation {
             eprintln!("WARNING: Removing the last particle from the simulation.");
         }
 
-        if self.particles.any_variational() {
+        if !self.particles.variational.is_empty() {
             eprintln!(
                 "WARNING: Removing particles not supported when calculating MEGNO. \
                  The particle was not removed."
@@ -545,7 +545,7 @@ impl Simulation {
         }
 
         if keep_sorted {
-            self.particles.remove(pi);
+            self.particles.active.remove(pi);
 
             if self.tree.is_some() {
                 eprintln!(
@@ -556,7 +556,7 @@ impl Simulation {
         } else if self.tree.is_some() {
             self.particles[pi].removed = true;
         } else {
-            self.particles.swap_remove(pi);
+            self.particles.active.swap_remove(pi);
         }
     }
 
@@ -629,13 +629,13 @@ impl Simulation {
                 node.kind = NodeKind::Internal { count: pt };
             }
             NodeKind::Leaf { particle } => {
-                if !self.is_particle_in_node(node_id) {
+                if !self.is_particle_inside_node(node_id) {
                     let oldpos = *particle;
 
                     let reinsertme = self.particles[oldpos].clone();
 
                     let last = self.particles.len() - 1;
-                    self.particles.swap(oldpos, last);
+                    self.particles.active.swap(oldpos, last);
 
                     let moved_particle_cell = if oldpos != last {
                         self.particles[oldpos].c
@@ -643,7 +643,7 @@ impl Simulation {
                         None
                     };
 
-                    self.particles.pop();
+                    self.particles.active.pop();
 
                     if let Some(cell) = moved_particle_cell {
                         let moved_node = tree.get_node_mut(cell).unwrap();
@@ -837,7 +837,7 @@ impl Simulation {
 
         self.update_accelerations();
 
-        if self.particles.any_variational() {
+        if !self.particles.variational.is_empty() {
             self.update_accelerations_for_variational_particles();
         }
 
@@ -861,7 +861,7 @@ impl Simulation {
             }
         }
 
-        if self.particles.any_variational() {
+        if !self.particles.variational.is_empty() {
             self.rescale_variational_particles();
         }
 

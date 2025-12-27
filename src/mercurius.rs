@@ -112,9 +112,9 @@ impl Mercurius {
                 let pi = &particles[new_index];
                 self.set_dcrit(p0, pi, g, dt, new_index);
                 if self.particles_backup.len() < particles.len() {
-                    self.particles_backup.resize(particles.len());
+                    self.particles_backup.resize_as(&particles);
                     self.particles_backup_additional_forces
-                        .resize(particles.len());
+                        .resize_as(&particles);
                 }
                 self.encounter_map.push(new_index);
                 if particles.are_all_active() {

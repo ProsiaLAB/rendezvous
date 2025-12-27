@@ -370,7 +370,7 @@ impl WHFast {
         {
             ctx.particles.n_real()
         } else {
-            ctx.particles.n_active()
+            ctx.particles.active.len()
         };
 
         let mut eta = m0;
@@ -407,7 +407,7 @@ impl Synchronize for WHFast {
         {
             n_real
         } else {
-            ctx.particles.n_active()
+            ctx.particles.active.len()
         };
 
         let sync_particles = match self.particles.take() {
@@ -437,55 +437,47 @@ impl Synchronize for WHFast {
 
         let masses = ctx
             .particles
-            .as_slice()
+            .active
             .iter()
             .map(|p| p.m)
             .collect::<Vec<f64>>();
 
         match self.coordinates {
             Coordinates::Jacobi => {
-                ctx.particles
-                    .as_mut_slice()
-                    .transform_jacobi_to_inertial_posvel(
-                        sync_particles.as_slice(),
-                        &masses,
-                        n_real,
-                        n_active,
-                    );
+                ctx.particles.active.transform_jacobi_to_inertial_posvel(
+                    &sync_particles.active,
+                    &masses,
+                    n_real,
+                    n_active,
+                );
             }
             Coordinates::DemocraticHeliocentric => {
-                ctx.particles
-                    .as_mut_slice()
-                    .transform_dhc_to_inertial_posvel(sync_particles.as_slice(), n_real, n_active);
+                ctx.particles.active.transform_dhc_to_inertial_posvel(
+                    &sync_particles.active,
+                    n_real,
+                    n_active,
+                );
             }
             Coordinates::Whds => {
-                ctx.particles
-                    .as_mut_slice()
-                    .transform_whds_to_inertial_posvel(sync_particles.as_slice(), n_real, n_active);
+                ctx.particles.active.transform_whds_to_inertial_posvel(
+                    &sync_particles.active,
+                    n_real,
+                    n_active,
+                );
             }
             Coordinates::Barycentric => {
                 ctx.particles
-                    .as_mut_slice()
+                    .active
                     .transform_barycentric_to_inertial_posvel(
-                        sync_particles.as_slice(),
+                        &sync_particles.active,
                         n_real,
                         n_active,
                     );
             }
         }
 
-        let var_particles = ctx.particles.variational_mut();
-        let sync_var_particles = sync_particles.variational();
-
         if let Some(vcs) = ctx.var_cfg {
-            for vc in vcs.iter() {
-                let start = vc.index;
-                let end = start + n_real;
-
-                let var = &mut var_particles[start..end];
-                let var_sync = &sync_var_particles[start..end];
-                var.transform_jacobi_to_inertial_posvel(var_sync, &masses, n_real, n_active);
-            }
+            todo!()
         }
 
         if self.keep_unsynchoronized {

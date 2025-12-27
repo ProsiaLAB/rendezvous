@@ -52,9 +52,10 @@ impl Trace {
             let new_n = particles.len();
             let old_n = new_n - 1;
 
-            self.particles_backup.resize(new_n);
-            self.particles_backup_kepler.resize(new_n);
-            self.particles_backup_additional_forces.resize(new_n);
+            self.particles_backup.resize_as(&particles);
+            self.particles_backup_kepler.resize_as(&particles);
+            self.particles_backup_additional_forces
+                .resize_as(&particles);
             self.resize_current_ks(old_n, new_n);
             for &p in self.encounter_map.iter().skip(1) {
                 self.current_ks[p * new_n + old_n] = 1;

@@ -2,7 +2,7 @@
 //! and symplectic. No configuration is available
 //! (the timestep is set in the simulation structure).
 
-use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
+use rayon::iter::ParallelIterator;
 
 use crate::gravity::IgnoreGravityTerms;
 use crate::integrator::ForceSplit;
