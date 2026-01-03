@@ -29,7 +29,7 @@ pub struct Particle {
     pub removed: bool,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Particles {
     pub active: Vec<Particle>,
     pub test: Vec<Particle>,

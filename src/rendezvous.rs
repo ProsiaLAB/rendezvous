@@ -1,4 +1,4 @@
-use std::ops::ControlFlow;
+use std::ops::{AddAssign, ControlFlow, MulAssign, SubAssign};
 
 use prosia_extensions::types::Vec3;
 use rayon::iter::ParallelIterator;
@@ -898,6 +898,58 @@ impl Simulation {
         };
 
         self.integrator.post_force(&mut ctx);
+    }
+}
+
+impl AddAssign for Simulation {
+    fn add_assign(&mut self, other: Self) {
+        assert!(
+            self.particles.len() == other.particles.len(),
+            "Cannot add simulations with different number of particles"
+        );
+
+        for i in 0..self.particles.len() {
+            self.particles[i].x += other.particles[i].x;
+            self.particles[i].y += other.particles[i].y;
+            self.particles[i].z += other.particles[i].z;
+
+            self.particles[i].vx += other.particles[i].vx;
+            self.particles[i].vy += other.particles[i].vy;
+            self.particles[i].vz += other.particles[i].vz;
+        }
+    }
+}
+
+impl SubAssign for Simulation {
+    fn sub_assign(&mut self, other: Self) {
+        assert!(
+            self.particles.len() == other.particles.len(),
+            "Cannot subtract simulations with different number of particles"
+        );
+
+        for i in 0..self.particles.len() {
+            self.particles[i].x -= other.particles[i].x;
+            self.particles[i].y -= other.particles[i].y;
+            self.particles[i].z -= other.particles[i].z;
+
+            self.particles[i].vx -= other.particles[i].vx;
+            self.particles[i].vy -= other.particles[i].vy;
+            self.particles[i].vz -= other.particles[i].vz;
+        }
+    }
+}
+
+impl MulAssign<f64> for Simulation {
+    fn mul_assign(&mut self, scalar: f64) {
+        for i in 0..self.particles.len() {
+            self.particles[i].x *= scalar;
+            self.particles[i].y *= scalar;
+            self.particles[i].z *= scalar;
+
+            self.particles[i].vx *= scalar;
+            self.particles[i].vy *= scalar;
+            self.particles[i].vz *= scalar;
+        }
     }
 }
 
