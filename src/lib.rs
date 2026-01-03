@@ -16,4 +16,5 @@ pub mod saba;
 pub mod sei;
 pub mod trace;
 pub mod tree;
+pub mod utils;
 pub mod whfast;
