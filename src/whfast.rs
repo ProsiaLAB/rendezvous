@@ -11,7 +11,7 @@ use thiserror::Error;
 use crate::gravity::{Gravity, IgnoreGravityTerms};
 use crate::integrator::{ForceSplit, Synchronize};
 use crate::integrator::{StepContext, SyncContext};
-use crate::particle::{self, Particle, Particles, TestParticleKind, Transformations};
+use crate::particle::{Particle, Particles, TestParticleKind, Transformations};
 
 const CORRECTOR_A_1: f64 = 0.41833001326703777398908601289259374469640768464934;
 const CORRECTOR_A_2: f64 = 0.83666002653407554797817202578518748939281536929867;

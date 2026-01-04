@@ -560,6 +560,33 @@ impl Simulation {
         }
     }
 
+    /// Add and initialize a set of first-order variational particles.
+    ///
+    /// Each call to this method adds one [`VariationalConfig`] to the simulation
+    /// and each variational config adds one variational particle for each real particle.
+    ///
+    /// If `is_test_particle` is true, then only one variational particle will be added
+    /// If `is_test_particle` is false, then variational particles will be added for all real particles
+    pub fn add_variational_first_order(&mut self, is_test_particle: bool) {
+        let var_cfg = VariationalConfig {
+            order: VariationalOrder::First,
+            is_test_particle,
+            log_rescale_accum: 0.0,
+            particles: Particles::default(),
+        };
+
+        match &mut self.var_cfg {
+            Some(var_cfgs) => {
+                var_cfgs.push(var_cfg);
+            }
+            None => {
+                self.var_cfg = Some(vec![var_cfg]);
+            }
+        }
+    }
+
+    pub fn add_variational_second_order(&mut self) {}
+
     pub fn update_tree(&mut self) {
         let size = self.root_x * self.root_y * self.root_z;
         let mut tree = self.tree.take().unwrap_or_else(|| Tree::new(size));
@@ -975,10 +1002,13 @@ pub enum ExitStatus {
 }
 
 pub struct VariationalConfig {
-    pub order: usize,
-    pub index: usize,
+    pub order: VariationalOrder,
     pub is_test_particle: bool,
-    pub index_first_order_a: usize,
-    pub index_first_order_b: usize,
     pub log_rescale_accum: f64,
+    pub particles: Particles,
+}
+
+pub enum VariationalOrder {
+    First,
+    Second(usize, usize),
 }
